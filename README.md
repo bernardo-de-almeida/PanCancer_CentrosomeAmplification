@@ -1,0 +1,2 @@
+# PanCancer_CentrosomeAmplification
+Here are the scripts used in the manuscript entitled "Pan-cancer association of a centrosome amplification gene expression signature with genomic alterations and clinical outcome".
