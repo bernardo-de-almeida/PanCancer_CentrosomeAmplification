@@ -5,8 +5,9 @@ Here are the scripts (in R markdown format, .Rmd) and necessary files to reprodu
 - [Figure 2 - CA20 is associated with different breast cancer clinical and molecular features](Breast_cancer)
 - [Figure 3 - CA20 is associated with genomic instability features in cancer](Genomic_instability)
 - [Figure 4 - CA20 is associated with cancer’s mutational spectrum](Mutations)
-- [Figure 5a - High CA20 is associated with poor patient prognosis, hypoxia and lower stromal infiltration in cancer](Calculate_CA20_scores)
-- [Figure 5b-e - High CA20 is associated with poor patient prognosis, hypoxia and lower stromal infiltration in cancer](Tumour_microennvironment)
+- Figure 5 - High CA20 is associated with poor patient prognosis, hypoxia and lower stromal infiltration in cancer
+  - [Survival analyses](Calculate_CA20_scores)
+  - [Tumour microenvironment analyses](Tumour_microennvironment)
 - [Figure 6 - Identification of compounds that selectively kill cancer cells with high CA20](Compounds)
 
 ### Questions
