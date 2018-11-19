@@ -1,0 +1,218 @@
+---
+title: "Hypoxia"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Tumour_microennvironment/")
+
+```
+
+```{r calculate Hypoxia score}
+
+# TCGA expression levels of genes included in the hypoxia metagene signature http://cancerres.aacrjournals.org/content/67/7/3441.figures-only
+# data for 96 genes - but remove NDRG1 (because it is in CA20)
+Reads_voom_table <- read.delim("Hypoxia_genes_TCGA.txt")
+Reads_voom_table <- Reads_voom_table[,-grep("NDRG1", names(Reads_voom_table))]
+
+Reads_voom_table_hypoxia <- as.data.frame(scale(as.matrix(Reads_voom_table[,1:95]), center = colMedians(as.matrix(Reads_voom_table[,1:95])), scale = F))
+Reads_voom_table_hypoxia$Hypoxia_score <- rowSums(as.matrix(Reads_voom_table_hypoxia))
+Reads_voom_table_hypoxia$Hypoxia_score_group <- ifelse(Reads_voom_table_hypoxia$Hypoxia_score<mean(Reads_voom_table_hypoxia$Hypoxia_score), "Lower", "Higher")
+
+Final_expression_table <- merge(Reads_voom_table, Reads_voom_table_hypoxia[,96:97], by=0)
+rownames(Final_expression_table) <- Final_expression_table[,1]
+Final_expression_table = Final_expression_table[,-1]
+
+```
+
+## Comapre hypoxia and CA20
+
+```{r Fig 5b}
+
+CA20_score <- read.delim("../Calculate_CA20_scores/CA20_expression_table_TCGA_CA20allCohorts.txt")
+
+Final_table <- merge(CA20_score, Final_expression_table, by=0)
+rownames(Final_table) <- Final_table[,1]
+Final_table = Final_table[,-1]
+
+pvalue_mut <- signif(cor.test(Final_table$CA20, Final_table$Hypoxia_score, method = "spearman")$p.value,2)
+r_mut <- signif(cor.test(Final_table$CA20, Final_table$Hypoxia_score, method = "spearman")$estimate,2)
+
+scatter <- ggplot(Final_table, aes(x=CA20, y=Hypoxia_score)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Hypoxia score")) + 
+      geom_point(colour="grey70", size=1, alpha=1) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="grey20") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,20)) +
+      scale_y_continuous(breaks = seq(-200,200,50), limits = c(-200,200)) +
+      annotate("text", x=-60, y=185, label=paste0("r = ",r_mut), size=4.5, hjust = 0) +
+      annotate("text", x=-60, y=160, label=paste0("p < 2.2e-16"), size=4.5, hjust = 0) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("Fig5b.pdf", height  = 4)
+
+print(scatter)
+
+dev.off()
+
+```
+
+# Independent of genomic instability and proliferation
+
+```{r Load and merge all data}
+
+# Hypoxia
+Final_expression_table_tum <- Final_expression_table[Final_expression_table$sample_type %in% "Tumor",]
+
+# CA20
+CA20 <- read.delim("../Calculate_CA20_scores/CA20_expression_table_TCGA_CA20allCohorts.txt")
+CA20$Sample <- substr(CA20$Sample, 1, 12)
+CA20$Sample_ID <- rownames(CA20)
+
+# Aneuploidy and mutation burden
+table <- read.delim("../Genomic_instability/TaylorCancerCell_TableS2.txt", na.strings = c("", " ", "na", "NA", "n.a.", "#N/A"))
+rownames(table) <- gsub("-", ".", table$Sample)
+
+# CopyNumber
+CNV <- read.delim("../Genomic_instability/Firebrowse_download/CNV_per_sample_all_TCGA.txt")
+CNV <- CNV[abs(CNV$Segment_Mean) >= 1,]
+
+CNV_table <- merge(CNV[!duplicated(CNV$Sample),c(1,7:10)], as.data.frame(table(CNV$Sample)), by=1)
+length(unique(CNV$Sample))
+colnames(CNV_table)[6] <- "CNV_freq" 
+rownames(CNV_table) <- gsub("-", ".", CNV_table$sample_name)
+
+Final_CNV_table <- merge(CA20, CNV_table, by=0)
+rownames(Final_CNV_table) <- Final_CNV_table[,1]
+Final_CNV_table = Final_CNV_table[,-1]
+Final_CNV_table <- Final_CNV_table[Final_CNV_table$sample_type.y %in% "Tumor",]
+
+# Clones per tumour
+ITH_table <- read.delim("../Genomic_instability/Andor_SuppTable.txt")
+rownames(ITH_table) <- gsub("-", ".", ITH_table[,1])
+  
+CA20_tum <- CA20[CA20$sample_type_detail %in% "Primary Solid Tumor" | CA20$Sample_ID %in% c("TCGA.D9.A1X3.06", "TCGA.D9.A4Z6.06", "TCGA.HR.A2OG.06", "TCGA.HR.A2OH.06"),]
+rownames(CA20_tum) <- CA20_tum$Sample
+Final_ITH_table <- merge(CA20_tum, ITH_table, by=0)
+rownames(Final_ITH_table) <- Final_ITH_table[,1]
+Final_ITH_table = Final_ITH_table[,-1]
+
+Final_table_3 <- merge(Final_CNV_table, Final_ITH_table[,21:36], by.x=0, by.y=7)
+rownames(Final_table_3) <- Final_table_3[,1]
+Final_table_3 = Final_table_3[,-1]
+
+### merge with aneuploidy score and mutation burden
+Final_table_aneuploidy <- merge(Final_table_3, table[,1:13], by=0)
+rownames(Final_table_aneuploidy) <- Final_table_aneuploidy[,1]
+Final_table_aneuploidy = Final_table_aneuploidy[,-1]
+
+## add proliferation
+Prolif_score <- read.csv("../Calculate_CA20_scores/TCGA_rol_rates.csv")
+Prolif_score$sample_id <- gsub("-",".",Prolif_score$patient_barcode)
+Prolif_score <- Prolif_score[Prolif_score$tumor %in% "TRUE",]
+# summarize by mean
+Prolif_score_2 <- aggregate(Prolif_score[,3],by=list(sample_id=Prolif_score$sample_id),data=Prolif_score,FUN=mean)
+names(Prolif_score_2)[2] <- "rates"
+
+Final_table_all <- merge(Final_table_aneuploidy, Prolif_score_2, by.x=21, by.y=1)
+# 1032 samples
+
+Linear_model_table <- Final_table_all
+Linear_model_table$Mut_per_mb <- Linear_model_table$SilentMutationspeMb+Linear_model_table$Non.silentMutationsperMb
+
+# convert to zscores
+Linear_model_table$CNV_freq <- (Linear_model_table$CNV_freq-mean(Linear_model_table$CNV_freq)) / sd(Linear_model_table$CNV_freq)
+Linear_model_table$Mut_per_mb <- (Linear_model_table$Mut_per_mb-mean(Linear_model_table$Mut_per_mb, na.rm=T)) / sd(Linear_model_table$Mut_per_mb, na.rm=T)
+Linear_model_table$CloneNumber.PurityNormalized. <- (Linear_model_table$CloneNumber.PurityNormalized.-mean(Linear_model_table$CloneNumber.PurityNormalized.)) / sd(Linear_model_table$CloneNumber.PurityNormalized.)
+Linear_model_table$AneuploidyScore.AS. <- (Linear_model_table$AneuploidyScore.AS.-mean(Linear_model_table$AneuploidyScore.AS.)) / sd(Linear_model_table$AneuploidyScore.AS.)
+Linear_model_table$rates <- (Linear_model_table$rates-mean(Linear_model_table$rates)) / sd(Linear_model_table$rates)
+
+rownames(Linear_model_table) <- Linear_model_table$Sample_ID
+
+Linear_model_table_final <- Linear_model_table[,c("Sample.x", "sample_type.x", "sample_type_detail.x", "Cohort.x", "CA20.x", "CNV_freq", "Mut_per_mb", "CloneNumber.PurityNormalized.", "AneuploidyScore.AS.", "rates")]
+
+# remove outlier
+Linear_model_table_final <- subset(Linear_model_table_final, Mut_per_mb<15)
+
+# Final merging
+Final_table <- merge(Linear_model_table_final, Final_expression_table_tum[,100:101], by=0)
+rownames(Final_table) <- Final_table[,1]
+Final_table = Final_table[,-1]
+
+```
+
+```{r analyses per cohort}
+
+Table_lm_all <- data.frame()
+
+for(i in 1:length(unique(Final_table$Cohort))){
+  
+cohort <- paste(unique(Final_table$Cohort)[i])
+Final_table_cohort <- Final_table[Final_table$Cohort %in% cohort,]
+
+M1 <- lm(CA20.x ~ Hypoxia_score +
+             CNV_freq + Mut_per_mb + CloneNumber.PurityNormalized. + AneuploidyScore.AS.,
+         data = Final_table_cohort)
+
+  if(nrow(summary(M1)$coefficients)>1){
+#summary(M1)
+coef <- summary(M1)$coefficients[2,1]
+result <- summary(M1)$coefficients[2,4]
+  }
+  
+if(nrow(summary(M1)$coefficients)<=1){
+#summary(M1)
+coef <- NA
+result <- NA
+  }
+ 
+  Table_cohort <- data.frame(Cohort=cohort,
+                              Coefficient=coef,
+                              Pvalue=result
+                              )
+
+Table_lm_all=rbind(Table_lm_all, Table_cohort)
+
+print(cohort)
+
+}
+
+Table_lm_all$FDR <- p.adjust(Table_lm_all$Pvalue, method = "fdr")
+
+
+# plot for all cohorts
+
+Table_lm_all_plot <- Table_lm_all[order(Table_lm_all$Coefficient, decreasing = T),]
+
+order_names=as.character(Table_lm_all_plot$Cohort)
+Table_lm_all_plot$Cohort <- factor(Table_lm_all_plot$Cohort, levels=order_names)
+
+Table_lm_all_plot$Significant <- ifelse(Table_lm_all_plot$FDR < 0.05 & Table_lm_all_plot$Coef > 0, "Pos", "Not Sig")
+Table_lm_all_plot$Significant[Table_lm_all_plot$FDR < 0.05 & Table_lm_all_plot$Coef < 0] <- "Neg"
+
+Plot <- ggplot(Table_lm_all_plot, aes(Table_lm_all_plot$Cohort, Table_lm_all_plot$Coef)) +
+    geom_bar(width=0.9, stat = "identity", aes(fill=factor(Significant)), colour=NA) + 
+    labs(x = "", y = "Coefficient (linear model)") +
+    theme_bw(base_size = 12) + theme(axis.text.y=element_text(size=8, colour="black"), axis.text.x=element_text(size=8, angle=45, hjust=1, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+    guides(fill=FALSE) +
+    scale_fill_manual(values = c("grey", "orangered", "dodgerblue")) +
+    scale_y_continuous(breaks = seq(-20,20,0.1))
+  
+name= paste("Fig5c.pdf")
+pdf(name, height = 2, width = 3)
+
+print(Plot)
+
+dev.off()
+
+```
+
