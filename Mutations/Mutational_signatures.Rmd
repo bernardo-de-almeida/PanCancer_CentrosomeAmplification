@@ -1,0 +1,262 @@
+---
+title: "Mutational signatures"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Mutations/")
+
+```
+
+```{r load data}
+
+# data downloaded from http://tardis.cgu.edu.tw/msignaturedb/Download/
+mSignatureDB <- read.delim("Mut_signature_profile_sample.txt", na.strings = c("", " ", "na", "NA", "n.a."))
+mSignatureDB_TCGA <- mSignatureDB[grep("TCGA", mSignatureDB$Tumor_Sample_Barcode),]
+mSignatureDB_TCGA$project_code <- as.character(mSignatureDB_TCGA$project_code)
+mSignatureDB_TCGA$project_code[mSignatureDB_TCGA$project_code %in% c("COAD-US", "READ-US")] <- "COADREAD-US"
+
+mSignatureDB_TCGA$project_code2 <- sapply(strsplit(as.character(mSignatureDB_TCGA$project_code),"-"), `[`, 1)
+mSignatureDB_TCGA$project_code2 <- droplevels(as.factor(mSignatureDB_TCGA$project_code2))
+mSignatureDB_TCGA$id <- paste(mSignatureDB_TCGA$project_code2, mSignatureDB_TCGA$Signature, sep="_")
+
+library(plyr)
+mSignatureDB_TCGA_average <- ddply(mSignatureDB_TCGA, .(id), mutate, Mean_contribution = mean(Contribution, na.rm=T))
+mSignatureDB_TCGA_average <- mSignatureDB_TCGA_average[!duplicated(mSignatureDB_TCGA_average$id),]
+
+mSignatureDB_TCGA_average$Signature2 <- sapply(strsplit(as.character(mSignatureDB_TCGA_average$Signature),"\\."), `[`, 2)
+mSignatureDB_TCGA_average <- mSignatureDB_TCGA_average[order(as.numeric(mSignatureDB_TCGA_average$Signature2)),]
+mSignatureDB_TCGA_average$Signature <- factor(mSignatureDB_TCGA_average$Signature, levels = unique(mSignatureDB_TCGA_average$Signature))
+
+```
+
+## linear model analyses with genomic instability
+
+```{r Load and merge all data}
+
+# CA20
+Final_expression_table <- read.delim("/home/bernardo/Documents/CA20_all_TCGA/Gene_expression_reads_normalized/CA20_expression_table_TCGA_CA20allCohorts.txt")
+Final_expression_table$Sample <- substr(Final_expression_table$Sample, 1, 12)
+Final_expression_table$Sample_ID <- rownames(Final_expression_table)
+
+# Aneuploidy and mutation burden
+table <- read.delim("../Genomic_instability/TaylorCancerCell_TableS2.txt", na.strings = c("", " ", "na", "NA", "n.a.", "#N/A"))
+rownames(table) <- gsub("-", ".", table$Sample)
+
+# CopyNumber
+CNV <- read.delim("../Genomic_instability/Firebrowse_download/CNV_per_sample_all_TCGA.txt")
+CNV <- CNV[abs(CNV$Segment_Mean) >= 1,]
+
+CNV_table <- merge(CNV[!duplicated(CNV$Sample),c(1,7:10)], as.data.frame(table(CNV$Sample)), by=1)
+length(unique(CNV$Sample))
+colnames(CNV_table)[6] <- "CNV_freq" 
+rownames(CNV_table) <- gsub("-", ".", CNV_table$sample_name)
+
+Final_CNV_table <- merge(Final_expression_table, CNV_table, by=0)
+rownames(Final_CNV_table) <- Final_CNV_table[,1]
+Final_CNV_table = Final_CNV_table[,-1]
+Final_CNV_table <- Final_CNV_table[Final_CNV_table$sample_type.y %in% "Tumor",]
+
+# Clones per tumour
+ITH_table <- read.delim("../Genomic_instability/Andor_SuppTable.txt")
+rownames(ITH_table) <- gsub("-", ".", ITH_table[,1])
+  
+Final_expression_table_tum <- Final_expression_table[Final_expression_table$sample_type_detail %in% "Primary Solid Tumor" | Final_expression_table$Sample_ID %in% c("TCGA.D9.A1X3.06", "TCGA.D9.A4Z6.06", "TCGA.HR.A2OG.06", "TCGA.HR.A2OH.06"),]
+rownames(Final_expression_table_tum) <- Final_expression_table_tum$Sample
+Final_ITH_table <- merge(Final_expression_table_tum, ITH_table, by=0)
+rownames(Final_ITH_table) <- Final_ITH_table[,1]
+Final_ITH_table = Final_ITH_table[,-1]
+
+Final_table_3 <- merge(Final_CNV_table, Final_ITH_table[,21:36], by.x=0, by.y=7)
+rownames(Final_table_3) <- Final_table_3[,1]
+Final_table_3 = Final_table_3[,-1]
+
+
+### merge with aneuploidy score and mutation burden
+Final_table_aneuploidy <- merge(Final_table_3, table[,1:13], by=0)
+rownames(Final_table_aneuploidy) <- Final_table_aneuploidy[,1]
+Final_table_aneuploidy = Final_table_aneuploidy[,-1]
+
+Linear_model_table <- Final_table_aneuploidy
+Linear_model_table$Mut_per_mb <- Linear_model_table$SilentMutationspeMb+Linear_model_table$Non.silentMutationsperMb
+
+# convert to zscores
+Linear_model_table$CNV_freq <- (Linear_model_table$CNV_freq-mean(Linear_model_table$CNV_freq)) / sd(Linear_model_table$CNV_freq)
+Linear_model_table$Mut_per_mb <- (Linear_model_table$Mut_per_mb-mean(Linear_model_table$Mut_per_mb, na.rm=T)) / sd(Linear_model_table$Mut_per_mb, na.rm=T)
+Linear_model_table$CloneNumber.PurityNormalized. <- (Linear_model_table$CloneNumber.PurityNormalized.-mean(Linear_model_table$CloneNumber.PurityNormalized.)) / sd(Linear_model_table$CloneNumber.PurityNormalized.)
+Linear_model_table$AneuploidyScore.AS. <- (Linear_model_table$AneuploidyScore.AS.-mean(Linear_model_table$AneuploidyScore.AS.)) / sd(Linear_model_table$AneuploidyScore.AS.)
+
+
+# Final merging
+Final_table <- merge(Linear_model_table, mSignatureDB_TCGA, by.x=21, by.y=3)
+
+```
+
+```{r pan-cancer linear model analyses}
+
+Table_lm_all <- data.frame()
+
+for(s in 1:30){
+  
+  sign <- paste(unique(Final_table$Signature)[s])
+
+  Final_table_sign <- Final_table[Final_table$Signature %in% sign,]
+
+  M1 <- lm(CA20.x ~ Contribution + Cohort +
+             CNV_freq + Mut_per_mb + CloneNumber.PurityNormalized. + AneuploidyScore.AS.,
+         data = Final_table_sign)
+  
+#summary(M1)
+coef <- summary(M1)$coefficients[2,1]
+result <- summary(M1)$coefficients[2,4]
+
+Table_lm_sign <- data.frame(Signature=sign,
+                           Coefficient=coef,
+                           Pvalue=result
+                           )
+
+Table_lm_all=rbind(Table_lm_all, Table_lm_sign)
+
+}
+
+Table_lm_all$FDR <- p.adjust(Table_lm_all$Pvalue, method = "fdr")
+write.table(Table_lm_all[order(Table_lm_all$Pvalue),], "Mutational_signatures_CA20_linear_model.txt", sep="\t", row.names = F, quote=F)
+
+```
+
+```{r Fig 3c - pan cancer}
+
+MutSign_table <- read.delim("Mutational_signatures_CA20_linear_model.txt")
+
+### plot for all signatures
+
+MutSign_table <- MutSign_table[order(MutSign_table$Pvalue, decreasing = F),]
+
+order_names=as.character(sapply(strsplit(as.character(MutSign_table$Signature),"\\."), `[`, 2))
+MutSign_table$Signature_final <- factor(sapply(strsplit(as.character(MutSign_table$Signature),"\\."), `[`, 2), levels=order_names)
+
+MutSign_table$Significant <- ifelse(MutSign_table$FDR < 0.05 & MutSign_table$Coefficient > 0, "Pos", "Not Sig")
+MutSign_table$Significant[MutSign_table$FDR < 0.05 & MutSign_table$Coefficient < 0] <- "Neg"
+
+Plot <- ggplot(MutSign_table, aes(MutSign_table$Signature_final, -log10(MutSign_table$Pvalue))) +
+    geom_bar(width=0.9, stat = "identity", aes(fill=factor(Significant)), colour=NA) + 
+    labs(x = "", y = "-log10 p-value") +
+    theme_bw(base_size = 12) + theme(axis.text.y=element_text(size=8, angle=90, hjust=0.5, colour="black"), axis.text.x=element_text(size=8, angle=90, hjust=1, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+    #theme(panel.background = element_rect(fill=NA,colour=NA), axis.line.x=element_line(colour="black"), axis.ticks.y=element_blank(), axis.text.x=element_text(size=12, colour="black"), axis.text.y=element_text(size=10, colour="black"), axis.title=element_text(size=16, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(size=17, hjust=0.5, colour="black")) + 
+    guides(fill=FALSE) +
+    scale_fill_manual(values = c("dodgerblue", "grey", "orangered"))
+  
+name= paste("Fig3c_pancancer.pdf")
+pdf(name, height = 2, width = 5.5)
+
+print(Plot)
+
+dev.off()
+
+```
+
+```{r Fig 3c - cohorts}
+
+pdf(paste0("Fig3c_cohorts.pdf"), height  = 3, width = 5)
+
+# CESC sign1
+
+cohort <- "CESC"
+sign <- "Signature.1"
+sign_label <- gsub("\\.", " ", sign)
+association <- "ageing"
+pvalue <- signif(Table_lm_all$Pvalue[Table_lm_all$Cohort %in% cohort & Table_lm_all$Signature %in% sign],1)
+
+table_sel <- Final_table[Final_table$Cohort %in% cohort & Final_table$Signature %in% sign,]
+
+pvalue_mut <- signif(cor.test(table_sel$CA20.x, table_sel$Contribution, method = "spearman")$p.value,2)
+r_mut <- signif(cor.test(table_sel$CA20.x, table_sel$Contribution, method = "spearman")$estimate,2)
+
+scatter <- ggplot(table_sel, aes(x=CA20.x, y=Contribution)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Contribution (%)")) + 
+      ggtitle(paste0(cohort, " - ", sign_label)) +
+      geom_point(colour="grey70", size=1, alpha=1) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="orangered") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,5), limits = c(5,36)) +
+      scale_y_continuous(breaks = seq(0,1,0.20), labels = seq(0,100,20), limits = c(0,0.85)) +
+      annotate("text", x=5, y=0.8, label=paste0("p = ", pvalue), size=5, hjust = 0) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=17, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+print(scatter)
+
+
+# LUSC sign1
+
+cohort <- "LUSC"
+sign <- "Signature.1"
+sign_label <- gsub("\\.", " ", sign)
+association <- "ageing"
+pvalue <- signif(Table_lm_all$Pvalue[Table_lm_all$Cohort %in% cohort & Table_lm_all$Signature %in% sign],1)
+
+table_sel <- Final_table[Final_table$Cohort %in% cohort & Final_table$Signature %in% sign,]
+
+pvalue_mut <- signif(cor.test(table_sel$CA20.x, table_sel$Contribution, method = "spearman")$p.value,2)
+r_mut <- signif(cor.test(table_sel$CA20.x, table_sel$Contribution, method = "spearman")$estimate,2)
+
+scatter <- ggplot(table_sel, aes(x=CA20.x, y=Contribution)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Contribution (%)")) + 
+      ggtitle(paste0(cohort, " - ", sign_label)) +
+      geom_point(colour="grey70", size=1, alpha=1) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="orangered") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(breaks = seq(0,1,0.20), labels = seq(0,100,20), limits = c(0,0.81)) +
+      annotate("text", x=-35, y=0.76, label=paste0("p = ", pvalue), size=5, hjust = 0) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=17, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+print(scatter)
+
+
+# PRAD sign1
+
+cohort <- "PRAD"
+sign <- "Signature.1"
+sign_label <- gsub("\\.", " ", sign)
+association <- "ageing"
+pvalue <- signif(Table_lm_all$Pvalue[Table_lm_all$Cohort %in% cohort & Table_lm_all$Signature %in% sign],1)
+
+table_sel <- Final_table[Final_table$Cohort %in% cohort & Final_table$Signature %in% sign,]
+
+pvalue_mut <- signif(cor.test(table_sel$CA20.x, table_sel$Contribution, method = "spearman")$p.value,2)
+r_mut <- signif(cor.test(table_sel$CA20.x, table_sel$Contribution, method = "spearman")$estimate,2)
+
+scatter <- ggplot(table_sel, aes(x=CA20.x, y=Contribution)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Contribution (%)")) + 
+      ggtitle(paste0(cohort, " - ", sign_label)) +
+      geom_point(colour="grey70", size=1, alpha=1) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="orangered") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(breaks = seq(0,1,0.20), labels = seq(0,100,20), limits = c(0,1.008)) +
+      annotate("text", x=-55, y=0.95, label=paste0("p = ", pvalue), size=5, hjust = 0) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=17, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+print(scatter)
+
+
+dev.off()
+
+
+```
+

@@ -1,0 +1,337 @@
+---
+title: "Gene mutation analyses"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Mutations/")
+
+```
+
+### Download mutation data
+
+```{r get TCGA cohorts}
+
+TCGA_cohorts_table <- read.delim("../TCGA_cohorts.txt")
+TCGA_cohorts <- TCGA_cohorts_table$Cohort
+
+# remove cohorts without MAF data
+TCGA_cohorts <- TCGA_cohorts[-19]
+
+```
+
+```{r download mutation data in looping from firebrowse}
+
+# create directory to download TCGA gene expression data
+system("mkdir Firebrowse_download")
+setwd("Firebrowse_download")
+
+colnames_list <- c("Hugo_Symbol", "Entrez_Gene_Id", "Chromosome", "Start_position", "Start_Position", "End_position", "End_Position", "Strand", "Variant_Classification", "Variant_Type", "Reference_Allele", "Tumor_Seq_Allele1", "Tumor_Seq_Allele2", "dbSNP_RS", "dbSNP_Val_Status", "Tumor_Sample_Barcode")
+
+Table_final_results <- data.frame()
+
+for(i in 1:length(TCGA_cohorts)) {
+
+cohort_TCGA <- TCGA_cohorts[i]
+  
+##### Mutations from firebrowse
+system(paste("wget http://gdac.broadinstitute.org/runs/stddata__2016_01_28/data/", cohort_TCGA,"/20160128/gdac.broadinstitute.org_", cohort_TCGA,".Mutation_Packager_Calls.Level_3.2016012800.0.0.tar.gz", sep=""))
+system(paste("tar -zxvf gdac.broadinstitute.org_", cohort_TCGA,".Mutation_Packager_Calls.Level_3.2016012800.0.0.tar.gz", sep=""))
+system(paste("rm gdac.broadinstitute.org_", cohort_TCGA,".Mutation_Packager_Calls.Level_3.2016012800.0.0.tar.gz", sep=""))
+
+Files <- list.files(paste("gdac.broadinstitute.org_", cohort_TCGA,".Mutation_Packager_Calls.Level_3.2016012800.0.0", sep=""))
+Files2 <- substr(Files[grep("TCGA", Files)],1,15)
+
+Cohort_results <- data.frame()
+
+for(f in 1:length(Files2)){
+  
+sample <- Files2[f]
+sample_table <- read.delim(paste0("gdac.broadinstitute.org_", cohort_TCGA, ".Mutation_Packager_Calls.Level_3.2016012800.0.0/", sample, ".maf.txt"))
+sample_table <- sample_table[,names(sample_table) %in% colnames_list]
+sample_table$Sample_ID <- sample
+sample_table$Cohort <- cohort_TCGA
+Cohort_results=rbind(Cohort_results, sample_table)
+
+} # samples
+
+names(Cohort_results)[names(Cohort_results) == "Start_Position"] <- "Start_position"
+names(Cohort_results)[names(Cohort_results) == "End_Position"] <- "End_position"
+
+Table_final_results=rbind(Table_final_results, Cohort_results)
+
+print(cohort_TCGA)
+
+} # cohorts
+
+write.table(Table_final_results, "../Mutations_per_sample_all_TCGA.txt", quote=F, sep="\t", row.names = F)
+
+# return to directory of analyses
+setwd("../")
+
+```
+
+# Load data
+
+```{r load expression data}
+
+Final_expression_table <- read.delim("../Calculate_CA20_scores/CA20_expression_table_TCGA_CA20allCohorts.txt")
+Final_expression_table$Sample <- substr(Final_expression_table$Sample, 1, 12)
+Final_expression_table$Sample_ID <- rownames(Final_expression_table)
+
+Final_expression_table_tum <- Final_expression_table[Final_expression_table$sample_type %in% "Tumor",]
+
+```
+
+```{r load mutation data}
+
+Mut_table <- read.delim("Mutations_per_sample_all_TCGA.txt")
+Mut_table$Sample_ID <- gsub("-", ".", Mut_table$Sample_ID)
+
+```
+
+## Analyses
+
+```{r linear model for all genes}
+
+Results <- data.frame()
+
+for(i in 1:length(unique(Mut_table$Hugo_Symbol))){
+  
+gene <- paste(unique(Mut_table$Hugo_Symbol)[i])
+  
+# at least 20 samples per group
+if(length(which(Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene])) >=20 & length(which(!Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene])) >=20){
+  
+  Final_expression_table_tum$Mutation_selected <- Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]
+  
+  fit <- lm(CA20 ~ Mutation_selected + Cohort, Final_expression_table_tum)
+  
+  pvalue = summary(fit)$coefficients[2,4]  
+  # delta mean
+  coef = summary(fit)$coefficients[2,1]
+
+wt <- mean(Final_expression_table_tum$CA20[!Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]])
+mut <- mean(Final_expression_table_tum$CA20[Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]])
+
+WT_samples <- length(which(!Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]))
+MUT_samples <- length(which(Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]))
+
+Results=rbind(Results, data.frame(gene, coef, pvalue, wt, mut, mut-wt, WT_samples, MUT_samples))
+
+}
+}
+
+Results$FDR <- p.adjust(Results$pvalue, method = "fdr")
+Results <- Results[order(Results$pvalue),c(1:3,9,4:8)]
+names(Results) <- c("Gene", "Coef", "Pvalue", "FDR", "WTmean", "MUTmean", "MUTminusWT_diff", "WT_samples", "MUT_samples")
+
+write.table(Results, "CA20_allMutations_linear_model_results.txt", quote=F, sep="\t", row.names = F)
+
+```
+
+```{r Fig 4a}
+
+library("ggrepel")
+
+Results <- read.delim("CA20_allMutations_linear_model_results.txt")
+Results <- Results[order(Results$Pvalue),]
+Results <- Results[!Results$Gene %in% ".",]
+Results$text <- "no"
+Results$text[1:10] <- "yes"
+Results$text <- as.factor(Results$text)
+Results$Significant <- ifelse(Results$FDR < 0.05 & Results$MUTminusWT_diff > 0, "Pos", "Not Sig")
+Results$Significant[Results$FDR < 0.05 & Results$MUTminusWT_diff < 0] <- "Neg"
+
+Results$Significant2 <- ifelse(Results$FDR < 0.05 & Results$Coef > 0, "Pos", "Not Sig")
+Results$Significant2[Results$FDR < 0.05 & Results$Coef < 0] <- "Neg"
+
+pdf("Fig4a.pdf")
+
+plot <- ggplot(Results, aes(x = Coef, y = -log10(Pvalue))) +
+  geom_point(aes(color = Significant2)) +
+  xlab("Coefficient (linear model)") +
+  ylab("-log10(p-value)") +
+  scale_color_manual(values = c("dodgerblue", "grey", "orangered")) +
+  theme_bw(base_size = 12) + theme(axis.text.x=element_text(size=13, colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.title=element_text(size=16, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+  geom_text_repel(
+    data = subset(Results, text == "yes"),
+    aes(label = Gene),
+    size = 5,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines")
+  ) +
+  guides(color=guide_legend(title="Significant (FDR < 0.05)"))
+
+print(plot)
+
+dev.off()
+
+```
+
+```{r Fig4b}
+
+Final_expression_table_tum$TP53 <- "wt"
+Final_expression_table_tum$TP53[Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% "TP53"]] <- "mut"
+Final_expression_table_tum$TP53 <- factor(Final_expression_table_tum$TP53, levels = c("wt", "mut"))
+
+Results_TP53 <- data.frame()
+
+for(i in 1:length(unique(Final_expression_table_tum$Cohort))){
+  
+cohort <- paste(unique(Final_expression_table_tum$Cohort)[i])
+
+if(length(which(Final_expression_table_tum$TP53 %in% "mut" & Final_expression_table_tum$Cohort %in% cohort)) >=20 & length(which(Final_expression_table_tum$TP53 %in% "mut" & Final_expression_table_tum$Cohort %in% cohort)) >=20){
+
+Final_expression_table_tum_cohort <- Final_expression_table_tum[Final_expression_table_tum$Cohort %in% cohort,]
+  
+fit <- lm(CA20 ~ TP53, Final_expression_table_tum_cohort)
+  
+pvalue = summary(fit)$coefficients[2,4]  
+coef = summary(fit)$coefficients[2,1]
+
+wt <- mean(Final_expression_table_tum_cohort$CA20[Final_expression_table_tum_cohort$TP53 %in% "wt"])
+mut <- mean(Final_expression_table_tum_cohort$CA20[Final_expression_table_tum_cohort$TP53 %in% "mut"])
+
+WT_samples <- length(which(Final_expression_table_tum$TP53 %in% "wt" & Final_expression_table_tum$Cohort %in% cohort))
+MUT_samples <- length(which(Final_expression_table_tum$TP53 %in% "mut" & Final_expression_table_tum$Cohort %in% cohort))
+
+Results_TP53=rbind(Results_TP53, data.frame(cohort, coef, pvalue, wt, mut, mut-wt, WT_samples, MUT_samples))
+
+}
+}
+
+Results_TP53$FDR <- p.adjust(Results_TP53$pvalue, method = "fdr")
+Results_TP53 <- Results_TP53[,c(1:3,9,4:8)]
+names(Results_TP53) <- c("Cohort", "Coef", "Pvalue", "FDR", "WTmean", "MUTmean", "MUTminusWT_diff", "WT_samples", "MUT_samples")
+
+
+### plot for all cohorts
+
+Results_TP53 <- Results_TP53[order(Results_TP53$Coef, decreasing = T),]
+
+order_names=as.character(Results_TP53$Cohort)
+Results_TP53$Cohort <- factor(Results_TP53$Cohort, levels=order_names)
+
+Results_TP53$Significant <- ifelse(Results_TP53$FDR < 0.05 & Results_TP53$Coef > 0, "Pos", "Not Sig")
+Results_TP53$Significant[Results_TP53$FDR < 0.05 & Results_TP53$Coef < 0] <- "Neg"
+
+Plot <- ggplot(Results_TP53, aes(Results_TP53$Cohort, Results_TP53$Coef)) +
+    geom_bar(width=0.9, stat = "identity", aes(fill=factor(Significant)), colour=NA) + 
+    labs(x = "", y = "Coefficient (linear model)") +
+    theme_bw(base_size = 12) + theme(axis.text.y=element_text(size=8, colour="black"), axis.text.x=element_text(size=8, angle=45, hjust=1, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+    guides(fill=FALSE) +
+    scale_fill_manual(values = c("dodgerblue", "grey", "orangered")) +
+    scale_y_continuous(breaks = seq(-20,20,2))
+  
+name= paste("Fig4b.pdf")
+pdf(name, height = 2, width = 4)
+
+print(Plot)
+
+dev.off()
+
+```
+
+```{r Fig S10}
+
+# GSEA results shown in Fig S10 are in GSEA folder
+
+```
+
+## driver mutations
+
+```{r Fig S10b}
+
+# Driver mutations from Catalog of Validated Oncogenic Mutations (https://www.cancergenomeinterpreter.org/mutations)
+Driver <- read.delim("catalog_of_validated_oncogenic_mutations.tsv")
+
+## which ones are driver?
+Mut_table$ID <- paste0("chr", Mut_table$Chromosome, ":g.", Mut_table$Start_position, Mut_table$Tumor_Seq_Allele1, ">", Mut_table$Tumor_Seq_Allele2)
+Mut_table$driver <- Mut_table$ID %in% Driver$gdna
+
+Results <- data.frame()
+
+for(gene in as.character(unique(Mut_table$Hugo_Symbol[Mut_table$driver %in% "TRUE"]))){
+  
+Final_expression_table_tum <- Final_expression_table[Final_expression_table$sample_type %in% "Tumor",]
+
+# at least 10 samples per group
+if(length(which(Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene & Mut_table$driver %in% "TRUE"])) >=10 & length(which(!Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene & Mut_table$driver %in% "TRUE"])) >=10){
+  
+Final_expression_table_tum$Mutation_selected <- "WT"
+Final_expression_table_tum$Mutation_selected[Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]] <- "passenger"
+Final_expression_table_tum$Mutation_selected[Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene & Mut_table$driver %in% "TRUE"]] <- "driver"
+  
+#only driver vs wt
+Final_expression_table_tum <- Final_expression_table_tum[Final_expression_table_tum$Mutation_selected %in% c("WT", "driver"),]
+Final_expression_table_tum$Mutation_selected <- droplevels(factor(Final_expression_table_tum$Mutation_selected))
+Final_expression_table_tum$Mutation_selected <- factor(Final_expression_table_tum$Mutation_selected, levels=c("WT", "driver"))
+
+fit <- lm(CA20 ~ Mutation_selected + Cohort, Final_expression_table_tum)
+  
+pvalue = summary(fit)$coefficients[2,4]  
+coef = summary(fit)$coefficients[2,1]
+
+wt <- mean(Final_expression_table_tum$CA20[Final_expression_table_tum$Mutation_selected %in% "WT"])
+mut <- mean(Final_expression_table_tum$CA20[Final_expression_table_tum$Mutation_selected %in% "driver"])
+
+WT_samples <- length(which(!Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]))
+MUT_samples <- length(which(Final_expression_table_tum$Sample_ID %in% Mut_table$Sample_ID[Mut_table$Hugo_Symbol %in% gene]))
+
+Results=rbind(Results, data.frame(gene, coef, pvalue, wt, mut, mut-wt, WT_samples, MUT_samples))
+
+}
+}
+
+Results$FDR <- p.adjust(Results$pvalue, method = "fdr")
+Results <- Results[order(Results$pvalue),c(1:3,9,4:8)]
+names(Results) <- c("Gene", "Coef", "Pvalue", "FDR", "WTmean", "MUT_driver_mean", "MUTminusWT_diff", "WT_samples", "MUT_driver_samples")
+
+write.table(Results, "CA20_DriverMutations_linear_model_results.txt", quote=F, sep="\t", row.names = F)
+
+
+## plot
+
+Results <- read.delim("CA20_DriverMutations_linear_model_results.txt")
+Results <- Results[order(Results$Pvalue),]
+Results <- Results[!Results$Gene %in% ".",]
+Results$text <- "no"
+Results$text[1:3] <- "yes"
+Results$text <- as.factor(Results$text)
+Results$Significant <- ifelse(Results$FDR < 0.05 & Results$MUTminusWT_diff > 0, "Pos", "Not Sig")
+Results$Significant[Results$FDR < 0.05 & Results$MUTminusWT_diff < 0] <- "Neg"
+
+Results$Significant2 <- ifelse(Results$FDR < 0.05 & Results$Coef > 0, "Pos", "Not Sig")
+Results$Significant2[Results$FDR < 0.05 & Results$Coef < 0] <- "Neg"
+
+pdf("FigS10b.pdf", width = 4.5, height = 5)
+
+plot <- ggplot(Results, aes(x = Coef, y = -log10(Pvalue))) +
+  geom_point(aes(color = Significant2), size=2) +
+  xlab("Coefficient (linear model)") +
+  ylab("-log10(p-value)") +
+  scale_x_continuous(limits = c(-11.2,11.2), breaks = seq(-20,20,5)) +
+  scale_color_manual(values = c("dodgerblue", "grey", "red")) +
+  theme_bw(base_size = 11) + theme(axis.text=element_text(size=10, colour="black"), axis.title=element_text(size=13, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=11), legend.title = element_text(size=12), legend.position = "bottom") +
+  geom_text_repel(
+    data = subset(Results, text == "yes"),
+    aes(label = Gene),
+    size = 4,
+    box.padding = unit(0.25, "lines"),
+    point.padding = unit(0.2, "lines")
+  ) +
+  guides(color=guide_legend(title="Significant (FDR < 0.05)"))
+
+print(plot)
+
+dev.off()
+
+```
+

@@ -1,0 +1,65 @@
+---
+title: "Gene mutation analyses"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Mutations/Integrate_with_CMap_data/")
+
+```
+
+```{r Fig 4d}
+
+Results <- read.delim("../CA20_allMutations_linear_model_results.txt")
+Results$Significant2 <- ifelse(Results$FDR < 0.05 & Results$Coef > 0, "Pos", "Not Sig")
+Results$Significant2[Results$FDR < 0.05 & Results$Coef < 0] <- "Neg"
+
+CMap_output <- read.delim("../../CMap_CA20_query.txt")
+CMap_output$mean_summary <- rowMeans(CMap_output[,9:17], na.rm=T)
+CMap_output_genes <- CMap_output[CMap_output$type %in% c("KD", "OE"),]
+
+Final_mutations <- merge(Results, CMap_output_genes, by.x=1, by.y=3)
+Final_mutations_KD <- Final_mutations[Final_mutations$type %in% "KD",]
+Final_mutations_KD <- Final_mutations_KD[order(Final_mutations_KD$Significant2),]
+
+
+pdf("Fig4d.pdf")
+
+Plot <- ggplot(aes(Coef, mean_summary), data = Final_mutations_KD) +
+  geom_point(aes(colour=Significant2)) + 
+  xlab("Coefficient (Linear model)") + 
+  ylab("Knock-down score (CMap)") + 
+  scale_y_continuous(breaks = seq(-100,100,20)) +
+  scale_x_continuous(breaks = seq(-10,10,2)) +
+  #labs(title=paste(spearman_number)) + 
+  theme_bw(base_size = 12) + theme(axis.text.x=element_text(size=13, colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.title=element_text(size=16, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+  scale_color_manual(values = c("dodgerblue", "grey", "orangered")) +
+  geom_text_repel(
+    data = subset(Final_mutations_KD, abs(mean_summary) > 80 & Significant2 %in% c("Neg", "Pos")),
+    aes(label = Gene),
+    size = 5,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines")
+  ) +
+  geom_hline(yintercept=80, linetype="dashed", col = "gray50") +
+  geom_hline(yintercept=-80, linetype="dashed", col = "gray50") +
+  guides(color=guide_legend(title="Significant (FDR < 0.05)"))
+
+print(Plot)
+
+dev.off()
+
+```
+
+```{r Fig 4e,f}
+
+# GSEA results shown in Fig 4e,f are in GSEA folder
+
+```
+
