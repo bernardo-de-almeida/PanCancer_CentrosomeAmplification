@@ -57,9 +57,3 @@ dev.off()
 
 ```
 
-```{r Fig 4e,f}
-
-# GSEA results shown in Fig 4e,f are in GSEA folder
-
-```
-

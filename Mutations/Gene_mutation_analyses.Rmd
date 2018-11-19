@@ -239,12 +239,6 @@ dev.off()
 
 ```
 
-```{r Fig S10}
-
-# GSEA results shown in Fig S10 are in GSEA folder
-
-```
-
 ## driver mutations
 
 ```{r Fig S10b}
