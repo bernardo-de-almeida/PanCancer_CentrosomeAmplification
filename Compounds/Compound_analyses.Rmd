@@ -1,0 +1,287 @@
+---
+title: "Compound analyses"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Compounds/")
+
+```
+
+```{r Load data}
+
+# Data from Rees et al, Nature Chemical Biology 2016 paper (https://www.nature.com/articles/nchembio.1986)
+CTRP <- read.delim("CTRP_CA20.txt")
+names(CTRP)[28:ncol(CTRP)] <- gsub("X", "", names(CTRP)[28:ncol(CTRP)])
+
+Compound_info <- read.delim("Compound_info_CTRP.txt")
+
+```
+
+```{r correlation analyses}
+
+Results <- data.frame()
+
+for (i in 28:ncol(CTRP)) {
+  
+  Compound_ID <- paste(names(CTRP)[i])
+  Compound_name <- Compound_info$cpd_name[Compound_info$master_cpd_id %in% Compound_ID]
+  BROAD_cpd_id <- Compound_info$broad_cpd_id[Compound_info$master_cpd_id %in% Compound_ID]
+  CPD_status <- Compound_info$cpd_status[Compound_info$master_cpd_id %in% Compound_ID]
+  gene_symbol_of_protein_target <- Compound_info$gene_symbol_of_protein_target[Compound_info$master_cpd_id %in% Compound_ID]
+  target_or_activity_of_compound <- Compound_info$target_or_activity_of_compound[Compound_info$master_cpd_id %in% Compound_ID]
+  SMILES <- Compound_info$cpd_smiles[Compound_info$master_cpd_id %in% Compound_ID]
+  
+  cor_p <- cor.test(CTRP$CA20, CTRP[,Compound_ID], method = "pearson")
+  cor_s <- cor.test(CTRP$CA20, CTRP[,Compound_ID], method = "spearman")
+  
+  Results=rbind(Results, data.frame(Compound_ID, Compound_name, BROAD_cpd_id, CPD_status, gene_symbol_of_protein_target, target_or_activity_of_compound, SMILES, as.numeric(cor_s$estimate), as.numeric(cor_s$p.value), as.numeric(cor_p$estimate), as.numeric(cor_p$p.value)))
+
+}
+
+Results$FDR_s <- p.adjust(Results$as.numeric.cor_s.p.value., method = "fdr")
+Results$FDR_p <- p.adjust(Results$as.numeric.cor_p.p.value., method = "fdr")
+Results <- Results[order(Results$as.numeric.cor_s.p.value.),c(1:9,12,10:11,13)]
+names(Results)[8:13] <- c("Spearman_coef", "Spearman_pvalue", "Spearman_FDR", "Pearson_coef", "Pearson_pvalue", "Pearson_FDR")
+
+write.table(Results, "CTRP_corr_results.txt", quote=F, sep="\t", row.names = F)
+
+```
+
+```{r Fig 6a}
+
+Results2 <-Results[order(Results$Spearman_pvalue),]
+
+Results2$text <- "no"
+Results2$text[1:6] <- "yes"
+Results2$text <- as.factor(Results2$text)
+Results2$Significant <- ifelse(Results2$Spearman_FDR < 0.05 & Results2$Spearman_coef > 0, "Pos", "Not Sig")
+Results2$Significant[Results2$Spearman_FDR < 0.05 & Results2$Spearman_coef < 0] <- "Neg"
+
+plot_drugs <- ggplot(Results2, aes(x = Spearman_coef, y = -log10(Spearman_pvalue))) +
+  geom_point(aes(color = Significant)) +
+  xlab("Spearman's correlation coefficient (CTRP)") +
+  ylab("-log10(p-value)") +
+  scale_color_manual(values = c("dodgerblue", "grey", "orangered")) +
+  theme_bw(base_size = 12) + theme(axis.text.x=element_text(size=13, colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.title=element_text(size=16, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+  geom_text_repel(
+    data = subset(Results2, text == "yes"),
+    aes(label = Compound_name),
+    size = 5,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines")
+  ) +
+  guides(color=guide_legend(title="Significant (FDR < 0.05)"))
+
+pdf("Fig6a.pdf")
+
+print(plot_drugs)
+
+dev.off()
+
+```
+
+
+```{r top positive drugs}
+
+library(scater)
+
+Results <- Results[order(Results$Spearman_pvalue),]
+
+List_plots <- list()
+
+for(i in 1:6)
+local({
+  
+Compound_ID = paste(Results$Compound_ID[i])
+Compound_name = paste(Results$Compound_name[i])
+Y_number=paste(Compound_name, "AUC")
+
+cor_s <- cor.test(CTRP$CA20, CTRP[,Compound_ID], method = "spearman")
+spearman_number=paste("Spearman correlation coefficient: ", signif(cor_s$estimate, digits=2)," (p = ", signif(cor_s$p.value, digits=2), ")", sep="")
+
+Plot <- ggplot(CTRP, aes(x=CA20, y=CTRP[,Compound_ID])) + 
+      xlab("CA20 score") + 
+      ylab(Y_number) + 
+      scale_y_continuous(breaks = seq(0,20,5), limits = c(0,20)) +
+      scale_x_continuous(breaks = seq(-100,100,10)) +
+      annotate("text", x=-30, y=2.2, label=paste0("r=",signif(cor_s$estimate,2)), size=6, hjust = 0) +
+      annotate("text", x=-30, y=0.7, label=paste0("p=",signif(cor_s$p.value,2)), size=6, hjust = 0) +
+      geom_point(colour="grey70", size=2) +
+      #geom_smooth(method = "lm", colour="dodgerblue") +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='dodgerblue') + 
+      scale_fill_continuous(low="white",high="dodgerblue") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text=element_text(size=15, colour="black"), axis.title.y=element_text(size=17, colour="black"), axis.title.x=element_blank(), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"))
+
+List_plots[[i]] <<- Plot
+
+})
+
+# plot multiple plots
+
+pdf("Fig6b.pdf", width = 11)
+
+multiplot(List_plots[[1]],
+          List_plots[[4]],
+          List_plots[[2]],
+          List_plots[[5]],
+          List_plots[[3]],
+          List_plots[[6]],
+          cols=3)
+
+dev.off()
+
+
+```
+
+### CMap drugs heatmap
+
+```{r Fig 6c}
+
+L1000_output <- read.delim("../CMap_CA20_query.txt", na.strings = c("NA", "na", "n.a.","NaN"))
+L1000_output$mean_summary <- rowMeans(L1000_output[,9:17], na.rm=T)
+L1000_output_drugs <- L1000_output[L1000_output$type %in% "CP",c(1:5,9:17,19)]
+L1000_output_drugs <- L1000_output_drugs[order(L1000_output_drugs$mean_summary),]
+
+L1000_output_drugs_sub <- L1000_output_drugs[c(1:20),]
+rownames(L1000_output_drugs_sub) <- L1000_output_drugs_sub$id
+
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+
+# melt
+longData <- melt(as.matrix(L1000_output_drugs_sub[,6:15]))
+longData$Var1 <- L1000_output_drugs_sub$name[match(longData$Var1, L1000_output_drugs_sub$id)]
+head(longData, 20)
+
+# Optionally, reorder both the row and column variables in any order
+# Here, they are sorted by mean value
+longData$Var1 <- factor(longData$Var1, levels = rev(unique(L1000_output_drugs_sub$name)))
+longData$Var2 <- factor(longData$Var2, levels = names(L1000_output_drugs_sub[,6:15]))
+
+# Define palette
+myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")), space="Lab")
+myPalette<-colorRampPalette(c("dodgerblue", "deepskyblue","deepskyblue","white"))
+myPalette <- colorRampPalette(c("dodgerblue", "slategray1", "white"))
+
+zp1 <- ggplot(longData,
+              aes(x = Var2, y = Var1, fill = value))+ 
+  geom_tile() +
+  scale_fill_gradientn(colours = myPalette(100)) + 
+  scale_x_discrete(expand = c(0, 0), position = "top", labels=c(names(L1000_output_drugs_sub[,6:14]), "Average")) +
+  scale_y_discrete(expand = c(0, 0)) +
+  coord_equal() +
+  theme_bw(base_size = 12) + theme(axis.text.x=element_text(size=13, angle=45, hjust=0, colour="black"), axis.ticks = element_blank(), axis.title = element_blank(), axis.text.y=element_text(size=13, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14)) +
+  guides(fill=guide_legend(title="Score"))
+
+pdf("Fig6c.pdf")
+print(zp1)
+dev.off()
+
+```
+
+
+```{r Fig S15}
+
+L1000_output <- read.delim("../CMap_CA20_query.txt", na.strings = c("NA", "na", "n.a.","NaN"))
+L1000_output$mean_summary <- rowMeans(L1000_output[,9:17], na.rm=T)
+L1000_output_drugs <- L1000_output[L1000_output$type %in% "CP",c(1:5,9:17,19)]
+L1000_output_drugs <- L1000_output_drugs[order(L1000_output_drugs$mean_summary, decreasing = T),]
+
+L1000_output_drugs_sub <- L1000_output_drugs[c(1:20),]
+rownames(L1000_output_drugs_sub) <- L1000_output_drugs_sub$id
+L1000_output_drugs_sub$name <- gsub("VEGF-receptor-2-kinase-inhibitor-IV", "VEGFR2-kinase-inhibitor-IV", as.character(L1000_output_drugs_sub$name))
+
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+
+# melt
+longData <- melt(as.matrix(L1000_output_drugs_sub[,6:15]))
+longData$Var1 <- L1000_output_drugs_sub$name[match(longData$Var1, L1000_output_drugs_sub$id)]
+head(longData, 20)
+
+# Optionally, reorder both the row and column variables in any order
+# Here, they are sorted by mean value
+longData$Var1 <- factor(longData$Var1, levels = rev(unique(L1000_output_drugs_sub$name)))
+longData$Var2 <- factor(longData$Var2, levels = names(L1000_output_drugs_sub[,6:15]))
+
+# Define palette
+myPalette <- colorRampPalette(c("white", "slategray1", "orangered"))
+myPalette <- colorRampPalette(c("dodgerblue", "white", "orangered"))
+
+zp1 <- ggplot(longData,
+              aes(x = Var2, y = Var1, fill = value))+ 
+  geom_tile() +
+  scale_fill_gradientn(colours = myPalette(100)) + 
+  scale_x_discrete(expand = c(0, 0), position = "top", labels=c(names(L1000_output_drugs_sub[,6:14]), "Average")) +
+  scale_y_discrete(expand = c(0, 0)) +
+  coord_equal() +
+  theme_bw(base_size = 12) + theme(axis.text.x=element_text(size=13, angle=45, hjust=0, colour="black"), axis.ticks = element_blank(), axis.title = element_blank(), axis.text.y=element_text(size=13, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14)) +
+  guides(fill=guide_legend(title="Score"))
+
+pdf("FigS15.pdf")
+print(zp1)
+dev.off()
+
+```
+
+# Merge CTRP and CMap analyses
+
+```{r merge data}
+
+L1000_output <- read.delim("../CMap_CA20_query.txt", na.strings = c("NA", "na", "n.a.","NaN"))
+L1000_output$mean_summary <- rowMeans(L1000_output[,9:17], na.rm=T)
+L1000_output_drugs <- L1000_output[L1000_output$type %in% "CP",c(1:5,18:19)]
+
+CTRP_results <- read.delim("CTRP_corr_results.txt")
+CTRP_results$gene_symbol_of_protein_target <- gsub("USP13;USP5", "USP", as.character(CTRP_results$gene_symbol_of_protein_target))
+CTRP_results$gene_symbol_of_protein_target <- gsub("FNTA;FNTB", "FNT", as.character(CTRP_results$gene_symbol_of_protein_target))
+CTRP_results$gene_symbol_of_protein_target <- gsub("CDK1;CDK2;CDK4;CDK5;CDK7;CDK9", "CDK", as.character(CTRP_results$gene_symbol_of_protein_target))
+
+CTRP_drug_info <- read.delim("Compound_info_CTRP.txt")
+
+Merge_table <- merge(CTRP_results, L1000_output_drugs, by.x=3, by.y=1)
+
+```
+
+```{r Fig 6d}
+
+cor.test(Merge_table$Spearman_coef, Merge_table$mean_summary, method="spearman")
+
+Merge_table$Significant <- ifelse(Merge_table$Spearman_FDR < 0.05 & Merge_table$Spearman_coef > 0, "Pos", "Not Sig")
+Merge_table$Significant[Merge_table$Spearman_FDR < 0.05 & Merge_table$Spearman_coef < 0] <- "Neg"
+
+Plot <- ggplot(aes(Spearman_coef, mean_summary), data = Merge_table) +
+  geom_point(aes(colour=Significant), size=2.5) + 
+  xlab("Spearman's correlation coefficient (CTRP)") + 
+  ylab("Drug average score (CMap)") + 
+  scale_y_continuous(lim=c(-100,100), breaks = seq(-100,100,20)) +
+  scale_x_continuous(breaks = seq(-1,1,0.1)) +
+  theme_bw(base_size = 12) + theme(axis.text.x=element_text(size=13, colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.title=element_text(size=16, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+  scale_color_manual(values = c("dodgerblue", "grey", "orangered")) +
+  guides(color=F) +
+  geom_text_repel(
+    data = subset(Merge_table, mean_summary < -90 & Spearman_FDR<0.05),
+    aes(label = gene_symbol_of_protein_target),
+    size = 4,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines")
+  ) +
+  geom_hline(yintercept=-90, linetype="dashed", col = "gray50")
+
+
+pdf("Fig6d.pdf", width = 9)
+print(Plot)
+dev.off()
+
+```
