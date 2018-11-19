@@ -1,0 +1,599 @@
+---
+title: "Genomic instability analyses"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Genomic_instability/")
+
+```
+
+```{r load CA20 scores}
+
+Final_expression_table <- read.delim("../Calculate_CA20_scores/CA20_expression_table_TCGA_CA20allCohorts.txt")
+Final_expression_table$Sample <- substr(Final_expression_table$Sample, 1, 12)
+Final_expression_table$Sample_ID <- rownames(Final_expression_table)
+
+```
+
+# Aneuploidy analyses
+
+```{r load Aneuploidy data}
+
+# Load Table S2 from data from Taylor et al, Cancer Cell 2018 (https://www.sciencedirect.com/science/article/pii/S1535610818301119)
+table <- read.delim("TaylorCancerCell_TableS2.txt", na.strings = c("", " ", "na", "NA", "n.a.", "#N/A"))
+rownames(table) <- gsub("-", ".", table$Sample)
+
+Final_table <- merge(Final_expression_table, table, by=0)
+rownames(Final_table) <- Final_table[,1]
+Final_table = Final_table[,-1]
+
+```
+
+```{r Fig 3a}
+
+library(ggsignif) 
+
+Final_table$Genome_doublings <- as.factor(Final_table$Genome_doublings)
+
+wilcox.test(Final_table$CA20[Final_table$Genome_doublings %in% "0"], Final_table$CA20[Final_table$Genome_doublings %in% "1"])
+wilcox.test(Final_table$CA20[Final_table$Genome_doublings %in% "0"], Final_table$CA20[Final_table$Genome_doublings %in% "2"])
+wilcox.test(Final_table$CA20[Final_table$Genome_doublings %in% "1"], Final_table$CA20[Final_table$Genome_doublings %in% "2"])
+
+plot_doubling <- ggplot(Final_table, aes(x=Genome_doublings, y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,20), limits = c(-54,45)) +
+      ylab(paste("CA20 score")) + 
+      geom_boxplot(width=0.7, outlier.colour = NA, aes(fill=Genome_doublings))+
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_grey(start=0.9, end=0.4) +
+      geom_signif(comparisons = list(c("0", "1")), annotations="****", y_position = 45, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("1", "2")), annotations="****", y_position = 45, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      scale_x_discrete(name="Genome doublings") +
+      guides(fill=F)
+
+pdf("Fig3a.pdf", width = 3, height = 1.6)
+
+print(plot_doubling)
+
+dev.off()
+
+```
+
+
+```{r Fig 3b}
+
+Final_table$CA20_group <- ifelse(Final_table$CA20<mean(Final_table$CA20), "Lower CA20", "Higher CA20")
+Final_table$CA20_group=relevel(as.factor(Final_table$CA20_group), "Lower CA20")
+
+cor.test(Final_table$CA20, Final_table$AneuploidyScore.AS., method = "spearman")
+
+scatter_aneuploidy <- ggplot(Final_table, aes(x=CA20, y=AneuploidyScore.AS.)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Aneuploidy Score")) + 
+      geom_point(colour="grey70", size=1, alpha=0.8) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="grey20") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(breaks = seq(0,40,10)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.y=element_text(margin=margin(0,10,0,0)), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("Fig3b.pdf", height  = 4)
+
+print(scatter_aneuploidy)
+
+dev.off()
+
+```
+
+```{r Fig S7a}
+
+# plot with proliferation
+Prolif_score <- read.csv("../Calculate_CA20_scores/TCGA_rol_rates.csv")
+Prolif_score$sample_id <- gsub("-",".",Prolif_score$patient_barcode)
+Prolif_score <- Prolif_score[Prolif_score$tumor %in% "TRUE",]
+# summarize by mean
+Prolif_score_2 <- aggregate(Prolif_score[,3],by=list(sample_id=Prolif_score$sample_id),data=Prolif_score,FUN=mean)
+names(Prolif_score_2)[2] <- "rates"
+
+Final_table$sample_id <- Final_table$Sample.x
+Final_table_prolif <- merge(Final_table, Prolif_score_2)
+
+# divide by median
+Final_table_prolif$median_prolif_group <- Final_table_prolif$rates>=median(Final_table_prolif$rates)
+
+M <- lm(CA20 ~ AneuploidyScore.AS. + median_prolif_group + Cohort,
+         data = Final_table_prolif)
+summary(M)
+
+scatter_prolif <- ggplot(Final_table_prolif, aes(x=CA20, y=AneuploidyScore.AS., colour=median_prolif_group, fill=median_prolif_group)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Aneuploidy Score")) + 
+      geom_point(size=0.8, alpha=0.3) +
+      geom_smooth(method="lm") +
+      annotate("text", x=-52, y=35, label=paste0("LR p < 2.2e-16"), size=5, hjust = 0) +
+      scale_fill_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      scale_colour_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      guides(colour="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(breaks = seq(0,40,10)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.y=element_text(margin=margin(0,10,0,0)), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("FigS7a.pdf", height  = 4)
+print(scatter_prolif)
+dev.off()
+
+```
+
+```{r Fig 3c}
+
+# -1 (del) vs 1 (amp)
+
+Results_2 <- data.frame()
+
+for(i in 41:79){
+  
+arm <- paste(names(Final_table)[i])
+
+Final_table_arm <- Final_table[Final_table[,i] %in% c("-1", "1"), ]
+Final_table_arm[,i] <- droplevels(factor(Final_table_arm[,i]))
+
+fit <- lm(CA20 ~ factor(Final_table_arm[,i]) + Cohort, Final_table_arm)
+  
+pvalue = summary(fit)$coefficients[2,4]  
+coef = summary(fit)$coefficients[2,1]
+
+Results_2=rbind(Results_2, data.frame(arm, coef, pvalue))
+
+}
+
+Results_2$FDR <- p.adjust(Results_2$pvalue, method = "fdr")
+
+Results_2$Significant2 <- ifelse(Results_2$FDR < 0.05 & Results_2$coef > 0, "Pos", "Not Sig")
+Results_2$Significant2[Results_2$FDR < 0.05 & Results_2$coef < 0] <- "Neg"
+
+volcano_plot <- ggplot(Results_2, aes(x = coef, y = -log10(pvalue))) +
+  geom_point(aes(color = Significant2)) +
+  xlab("Coefficient (linear model)") +
+  ylab("-log10(p-value)") +
+  scale_color_manual(values = c("dodgerblue", "grey", "orangered")) +
+  theme_bw(base_size = 12) + theme(axis.text.x=element_text(size=13, colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.title=element_text(size=16, colour="black"), legend.key = element_rect(fill="White"), legend.text = element_text(size=13), legend.title = element_text(size=14), legend.position = "bottom") +
+  geom_text_repel(
+    data = subset(Results_2, -log10(pvalue) > 5),
+    aes(label = gsub("X", "", arm)),
+    size = 5,
+    box.padding = unit(0.35, "lines"),
+    point.padding = unit(0.3, "lines")
+  ) +
+  guides(color=guide_legend(title="Significant (FDR < 0.05)"))
+
+
+pdf("Fig3c.pdf")
+
+print(volcano_plot)
+
+dev.off()
+
+
+## individual plots
+
+violin_5q <- ggplot(Final_table[complete.cases(Final_table$X5q),], aes(x=factor(X5q), y=CA20)) + 
+      scale_x_discrete(name="", labels=c("Del", "0", "Amp")) +
+      scale_y_continuous("CA20 score", breaks = seq(-100,100,20), limits = c(-54, 47)) +
+      geom_signif(comparisons = list(c("-1", "1")), annotations="****", y_position = 44, tip_length = 0.02, size = 0.5, textsize = 4, vjust=0.3) +
+      geom_boxplot(width=0.5, outlier.colour = NA, aes(fill=factor(X5q))) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line.y=element_line(colour="black"), axis.ticks.x=element_blank(), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), plot.title = element_text(size=9, hjust=0.5, colour="black")) + 
+      guides(fill=FALSE) +
+      scale_fill_manual(values = c("-1"="dodgerblue", "0"="grey", "1"="orangered"))
+
+violin_16p <- ggplot(Final_table[complete.cases(Final_table$X16p),], aes(x=factor(X16p), y=CA20)) + 
+      scale_x_discrete(name="", labels=c("Del", "0", "Amp")) +
+      scale_y_continuous("CA20 score", breaks = seq(-100,100,20), limits = c(-54, 47)) +
+      geom_signif(comparisons = list(c("-1", "1")), annotations="****", y_position = 44, tip_length = 0.02, size = 0.5, textsize = 4, vjust=0.3) +
+      geom_boxplot(width=0.5, outlier.colour = NA, aes(fill=factor(X16p))) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line.y=element_line(colour="black"), axis.ticks.x=element_blank(), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), plot.title = element_text(size=9, hjust=0.5, colour="black")) + 
+      guides(fill=FALSE) +
+      scale_fill_manual(values = c("-1"="dodgerblue", "0"="grey", "1"="orangered"))
+
+violin_7p <- ggplot(Final_table[complete.cases(Final_table$X7p),], aes(x=factor(X7p), y=CA20)) + 
+      scale_x_discrete(name="", labels=c("Del", "0", "Amp")) +
+      scale_y_continuous("CA20 score", breaks = seq(-100,100,20), limits = c(-54, 47)) +
+      geom_signif(comparisons = list(c("-1", "1")), annotations="****", y_position = 44, tip_length = 0.02, size = 0.5, textsize = 4, vjust=0.3) +
+      geom_boxplot(width=0.5, outlier.colour = NA, aes(fill=factor(X7p))) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line.y=element_line(colour="black"), axis.ticks.x=element_blank(), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), plot.title = element_text(size=9, hjust=0.5, colour="black")) + 
+      guides(fill=FALSE) +
+      scale_fill_manual(values = c("-1"="dodgerblue", "0"="grey", "1"="orangered"))
+
+pdf("Fig3c_individual.pdf", width = 1.15, height = 1.7)
+print(violin_5q)
+print(violin_16p)
+print(violin_7p)
+dev.off()
+
+```
+
+```{r Fig S5}
+
+## 5q on breast and on other cohorts
+
+Final_table_arm <- Final_table[Final_table$X5q %in% c("-1", "1") & Final_table$Cohort %in% "BRCA", ]
+Final_table_arm$X5q <- droplevels(factor(Final_table_arm$X5q))
+wilcox.test(Final_table_arm$CA20~Final_table_arm$X5q)
+
+violin_5q_breast <- ggplot(Final_table[complete.cases(Final_table$X5q) & Final_table$Cohort %in% "BRCA",], aes(x=factor(X5q), y=CA20)) + 
+      scale_x_discrete(name="", labels=c("Del", "0", "Amp")) +
+      scale_y_continuous("CA20 score", breaks = seq(-100,100,20), limits = c(-54, 47)) +
+      geom_signif(comparisons = list(c("-1", "1")), annotations="****", y_position = 44, tip_length = 0.02, size = 0.5, textsize = 4, vjust=0.3) +
+      #ggtitle("5q") +
+      geom_boxplot(width=0.5, outlier.colour = NA, aes(fill=factor(X5q))) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line.y=element_line(colour="black"), axis.ticks.x=element_blank(), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), plot.title = element_text(size=9, hjust=0.5, colour="black")) + 
+      guides(fill=FALSE) +
+      scale_fill_manual(values = c("-1"="dodgerblue", "0"="grey", "1"="orangered"))
+
+Final_table_arm <- Final_table[Final_table$X5q %in% c("-1", "1") & !Final_table$Cohort %in% "BRCA", ]
+Final_table_arm$X5q <- droplevels(factor(Final_table_arm$X5q))
+wilcox.test(Final_table_arm$CA20~Final_table_arm$X5q)
+
+violin_5q_others <- ggplot(Final_table[complete.cases(Final_table$X5q) & !Final_table$Cohort %in% "BRCA",], aes(x=factor(X5q), y=CA20)) + 
+      scale_x_discrete(name="", labels=c("Del", "0", "Amp")) +
+      scale_y_continuous("CA20 score", breaks = seq(-100,100,20), limits = c(-54, 47)) +
+      geom_signif(comparisons = list(c("-1", "1")), annotations="****", y_position = 44, tip_length = 0.02, size = 0.5, textsize = 4, vjust=0.3) +
+      #ggtitle("5q") +
+      geom_boxplot(width=0.5, outlier.colour = NA, aes(fill=factor(X5q))) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line.y=element_line(colour="black"), axis.ticks.x=element_blank(), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=9, colour="black"), legend.key = element_rect(fill="White"), plot.title = element_text(size=9, hjust=0.5, colour="black")) + 
+      guides(fill=FALSE) +
+      scale_fill_manual(values = c("-1"="dodgerblue", "0"="grey", "1"="orangered"))
+
+pdf("FigS5.pdf", width = 1.15, height = 1.7)
+print(violin_5q_breast)
+print(violin_5q_others)
+dev.off()
+
+```
+
+# Mutations analyses
+
+```{r Fig 3d}
+
+Final_table_2 <- Final_table[complete.cases(Final_table$SilentMutationspeMb),]
+Final_table_2$Mut_per_mb <- Final_table_2$SilentMutationspeMb+Final_table_2$Non.silentMutationsperMb
+
+cor.test(Final_table_2$CA20, Final_table_2$Mut_per_mb, method = "spearman")
+
+Final_table_3 <- Final_table_2[Final_table_2$Mut_per_mb>0,]
+
+scatter <- ggplot(Final_table_3, aes(x=CA20, y=log10(Mut_per_mb))) + 
+      xlab("CA20 score") + 
+      ylab(paste("Number of mutations per Mb")) + 
+      #ggtitle(paste0("Spearman correlation coefficient = ", r_mut, "; p-value = ", pvalue_mut)) +
+      geom_point(colour="grey70", size=1, alpha=0.8) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="grey20") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(breaks = c(-2,-1,0,1,2,3), labels=c(0.01,0.1,1,10,100,1000), limits = c(-2,3)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("Fig3d.pdf", height  = 4)
+
+print(scatter)
+
+dev.off()
+
+```
+
+```{r Fig S7b}
+
+# plot with proliferation
+Prolif_score <- read.csv("../Calculate_CA20_scores/TCGA_rol_rates.csv")
+Prolif_score$sample_id <- gsub("-",".",Prolif_score$patient_barcode)
+Prolif_score <- Prolif_score[Prolif_score$tumor %in% "TRUE",]
+# summarize by mean
+Prolif_score_2 <- aggregate(Prolif_score[,3],by=list(sample_id=Prolif_score$sample_id),data=Prolif_score,FUN=mean)
+names(Prolif_score_2)[2] <- "rates"
+
+Final_table_3$sample_id <- Final_table_3$Sample.x
+Final_table_3_prolif <- merge(Final_table_3, Prolif_score_2)
+
+# divide by median
+Final_table_3_prolif$median_prolif_group <- Final_table_3_prolif$rates>=median(Final_table_prolif$rates)
+plot(density(Final_table_3_prolif$rates))
+
+M <- lm(CA20 ~ Mut_per_mb + median_prolif_group + Cohort,
+         data = Final_table_3_prolif)
+summary(M)
+
+scatter_prolif <- ggplot(Final_table_3_prolif, aes(x=CA20, y=log10(Mut_per_mb), colour=median_prolif_group, fill=median_prolif_group)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Number of mutations per Mb")) + 
+      geom_point(size=0.8, alpha=0.3) +
+      geom_smooth(method="lm") +
+      annotate("text", x=-53, y=log10(450), label=paste0("LR p < 2.2e-16"), size=5, hjust = 0) +
+      scale_fill_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      scale_colour_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      guides(colour="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(breaks = c(-2,-1,0,1,2,3), labels=c(0.01,0.1,1,10,100,1000), limits = c(-2,3)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("FigS7b.pdf", height  = 4)
+print(scatter_prolif)
+dev.off()
+```
+ 
+# CNA analyses
+
+```{r load TCGA copy number data}
+
+system("mkdir Firebrowse_download")
+setwd("Firebrowse_download")
+
+TCGA_cohorts_table <- read.delim("../../TCGA_cohorts.txt")
+TCGA_cohorts <- TCGA_cohorts_table$Cohort
+
+Table_final_results <- data.frame()
+
+for(i in 1:length(TCGA_cohorts)) {
+
+cohort_TCGA <- TCGA_cohorts[i]
+  
+##### Download from firebrowse
+system(paste("wget http://gdac.broadinstitute.org/runs/stddata__2016_01_28/data/", cohort_TCGA,"/20160128/gdac.broadinstitute.org_", cohort_TCGA,".Merge_snp__genome_wide_snp_6__broad_mit_edu__Level_3__segmented_scna_minus_germline_cnv_hg19__seg.Level_3.2016012800.0.0.tar.gz", sep=""))
+system(paste("tar -zxvf gdac.broadinstitute.org_", cohort_TCGA,".Merge_snp__genome_wide_snp_6__broad_mit_edu__Level_3__segmented_scna_minus_germline_cnv_hg19__seg.Level_3.2016012800.0.0.tar.gz", sep=""))
+system(paste("rm gdac.broadinstitute.org_", cohort_TCGA,".Merge_snp__genome_wide_snp_6__broad_mit_edu__Level_3__segmented_scna_minus_germline_cnv_hg19__seg.Level_3.2016012800.0.0.tar.gz", sep=""))
+
+CNV_table <- read.delim(paste("gdac.broadinstitute.org_", cohort_TCGA,".Merge_snp__genome_wide_snp_6__broad_mit_edu__Level_3__segmented_scna_minus_germline_cnv_hg19__seg.Level_3.2016012800.0.0/", cohort_TCGA,".snp__genome_wide_snp_6__broad_mit_edu__Level_3__segmented_scna_minus_germline_cnv_hg19__seg.seg.txt", sep=""), na.strings = c("null", "", " ", "NA", "na"))
+
+CNV_table$sample_name=substr(CNV_table$Sample,1,15)
+
+CNV_table$sample_type <- NA
+CNV_table$sample_type[grep(".01$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".02$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".03$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".04$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".05$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".06$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".07$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".08$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".09$", CNV_table$sample_name)] <- "Tumor"
+CNV_table$sample_type[grep(".10$", CNV_table$sample_name)] <- "Normal"
+CNV_table$sample_type[grep(".11$", CNV_table$sample_name)] <- "Normal"
+CNV_table$sample_type[grep(".12$", CNV_table$sample_name)] <- "Normal"
+CNV_table$sample_type[grep(".13$", CNV_table$sample_name)] <- "Normal"
+CNV_table$sample_type[grep(".14$", CNV_table$sample_name)] <- "Normal"
+
+
+CNV_table$sample_type_detail <- NA
+CNV_table$sample_type_detail[grep(".01$", CNV_table$sample_name)] <- "Primary Solid Tumor"
+CNV_table$sample_type_detail[grep(".02$", CNV_table$sample_name)] <- "Recurrent Solid Tumor"
+CNV_table$sample_type_detail[grep(".03$", CNV_table$sample_name)] <- "Primary Blood Derived Cancer"
+CNV_table$sample_type_detail[grep(".04$", CNV_table$sample_name)] <- "Recurrent Blood Derived Cancer"
+CNV_table$sample_type_detail[grep(".05$", CNV_table$sample_name)] <- "Additional - New Primary"
+CNV_table$sample_type_detail[grep(".06$", CNV_table$sample_name)] <- "Metastatic"
+CNV_table$sample_type_detail[grep(".07$", CNV_table$sample_name)] <- "Additional Metastatic"
+CNV_table$sample_type_detail[grep(".08$", CNV_table$sample_name)] <- "Human Tumor Original Cells"
+CNV_table$sample_type_detail[grep(".09$", CNV_table$sample_name)] <- "Primary Blood Derived Cancer - Bone Marrow"
+CNV_table$sample_type_detail[grep(".10$", CNV_table$sample_name)] <- "Blood Derived Normal"
+CNV_table$sample_type_detail[grep(".11$", CNV_table$sample_name)] <- "Solid Tissue Normal"
+CNV_table$sample_type_detail[grep(".12$", CNV_table$sample_name)] <- "Buccal Cell Normal"
+CNV_table$sample_type_detail[grep(".13$", CNV_table$sample_name)] <- "EBV Immortalized Normal"
+CNV_table$sample_type_detail[grep(".14$", CNV_table$sample_name)] <- "Bone Marrow Normal"
+
+
+CNV_table$Cohort <- cohort_TCGA
+
+Table_final_results=rbind(Table_final_results, CNV_table)
+
+print(cohort_TCGA)
+
+} # cohorts
+
+# Merge all data
+write.table(Table_final_results, "CNV_per_sample_all_TCGA.txt", quote=F, sep="\t", row.names = F)
+
+# return to directory of analyses
+setwd("../")
+
+```
+
+```{r Fig 3e}
+
+Table_final_results <- read.delim("Firebrowse_download/CNV_per_sample_all_TCGA.txt")
+
+# cut-off of 1 (at least heterozygous gain/loss)
+Table_final_results_filtered <- Table_final_results[abs(Table_final_results$Segment_Mean) >= 1,]
+
+CNV_table <- merge(Table_final_results_filtered[!duplicated(Table_final_results_filtered$Sample),c(1,7:10)], as.data.frame(table(Table_final_results_filtered$Sample)), by=1)
+length(unique(Table_final_results_filtered$Sample))
+colnames(CNV_table)[6] <- "CNV_freq" 
+rownames(CNV_table) <- gsub("-", ".", CNV_table$sample_name)
+
+# merge
+Final_CNV_table <- merge(Final_expression_table, CNV_table, by=0)
+rownames(Final_CNV_table) <- Final_CNV_table[,1]
+Final_CNV_table = Final_CNV_table[,-1]
+
+Final_CNV_table <- Final_CNV_table[Final_CNV_table$sample_type.y %in% "Tumor",]
+Final_CNV_table$CA20_group <- ifelse(Final_CNV_table$CA20<mean(Final_CNV_table$CA20), "Lower CA20", "Higher CA20")
+
+cor.test(Final_CNV_table$CA20, Final_CNV_table$CNV_freq, method = "spearman")
+
+scatter <- ggplot(Final_CNV_table, aes(x=CA20, y=CNV_freq)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Number of CNAs")) + 
+      geom_point(colour="grey70", size=1, alpha=1) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="grey20") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_log10(breaks = c(0,1,10,100,1000)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("Fig3e.pdf", height  = 4)
+print(scatter)
+dev.off()
+
+```
+
+```{r Fig S7c}
+
+# plot with proliferation
+Prolif_score <- read.csv("../Calculate_CA20_scores/TCGA_rol_rates.csv")
+Prolif_score$sample_id <- gsub("-",".",Prolif_score$patient_barcode)
+Prolif_score <- Prolif_score[Prolif_score$tumor %in% "TRUE",]
+# summarize by mean
+Prolif_score_2 <- aggregate(Prolif_score[,3],by=list(sample_id=Prolif_score$sample_id),data=Prolif_score,FUN=mean)
+names(Prolif_score_2)[2] <- "rates"
+
+Final_CNV_table$sample_id <- Final_CNV_table$Sample.x
+Final_CNV_table_prolif <- merge(Final_CNV_table, Prolif_score_2)
+
+# divide by median
+Final_CNV_table_prolif$median_prolif_group <- Final_CNV_table_prolif$rates>=median(Final_CNV_table_prolif$rates)
+
+M <- lm(CA20 ~ CNV_freq + median_prolif_group + Cohort.y,
+         data = Final_CNV_table_prolif)
+summary(M)
+
+scatter_prolif <- ggplot(Final_CNV_table_prolif, aes(x=CA20, y=CNV_freq, colour=median_prolif_group, fill=median_prolif_group)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Number of CNAs")) + 
+      geom_point(size=0.8, alpha=0.3) +
+      geom_smooth(method="lm") +
+      annotate("text", x=-55, y=450, label=paste0("LR p < 2.2e-16"), size=5, hjust = 0) +
+      scale_fill_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      scale_colour_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      guides(colour="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_log10(breaks = c(0,1,10,100,1000)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("FigS7c.pdf", height  = 4)
+print(scatter_prolif)
+dev.off()
+
+```
+
+# Clones per tumour analyses
+
+```{r Fig 3f}
+
+# Supplementary data from https://www.nature.com/articles/nm.3984
+ITH_table <- read.delim("Andor_SuppTable.txt")
+rownames(ITH_table) <- gsub("-", ".", ITH_table[,1])
+
+# merge
+# Only primary tumour samples or metastatic samples without primary tumour ones
+Final_expression_table_tum <- Final_expression_table[Final_expression_table$sample_type_detail %in% "Primary Solid Tumor" | Final_expression_table$Sample_ID %in% c("TCGA.D9.A1X3.06", "TCGA.D9.A4Z6.06", "TCGA.HR.A2OG.06", "TCGA.HR.A2OH.06"),]
+rownames(Final_expression_table_tum) <- Final_expression_table_tum$Sample
+
+Final_ITH_table <- merge(Final_expression_table_tum, ITH_table, by=0)
+rownames(Final_ITH_table) <- Final_ITH_table[,1]
+Final_ITH_table = Final_ITH_table[,-1]
+
+cor.test(Final_ITH_table$CA20, Final_ITH_table$CloneNumber.PurityNormalized., method = "spearman")
+
+scatter <- ggplot(Final_ITH_table, aes(x=CA20, y=CloneNumber.PurityNormalized.)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Clones per tumour")) + 
+      geom_point(colour="grey70", size=1, alpha=1) +
+      stat_density2d(aes(fill=..level..,alpha=..level..),geom='polygon',colour='black') + 
+      scale_fill_continuous(low="white",high="grey20") +
+      scale_alpha(range = c(0.1,0.3)) +
+      guides(alpha="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(lim=c(0,20), breaks = seq(-2,22,4)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.y=element_text(margin=margin(0,10,0,0)), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("Fig3f.pdf", height  = 4)
+
+print(scatter)
+
+dev.off()
+
+```
+
+```{r Fig S7d}
+
+# plot with proliferation
+Prolif_score <- read.csv("../Calculate_CA20_scores/TCGA_rol_rates.csv")
+Prolif_score$sample_id <- gsub("-",".",Prolif_score$patient_barcode)
+Prolif_score <- Prolif_score[Prolif_score$tumor %in% "TRUE",]
+# summarize by mean
+Prolif_score_2 <- aggregate(Prolif_score[,3],by=list(sample_id=Prolif_score$sample_id),data=Prolif_score,FUN=mean)
+names(Prolif_score_2)[2] <- "rates"
+
+Final_ITH_table$sample_id <- Final_ITH_table$Sample
+Final_ITH_table_prolif <- merge(Final_ITH_table, Prolif_score_2)
+
+# divide by median
+Final_ITH_table_prolif$median_prolif_group <- Final_ITH_table_prolif$rates>=median(Final_ITH_table_prolif$rates)
+
+M <- lm(CA20 ~ CloneNumber.PurityNormalized. + median_prolif_group + Cohort,
+         data = Final_ITH_table_prolif)
+summary(M)
+
+scatter_prolif <- ggplot(Final_ITH_table_prolif, aes(x=CA20, y=CloneNumber.PurityNormalized., colour=median_prolif_group, fill=median_prolif_group)) + 
+      xlab("CA20 score") + 
+      ylab(paste("Clones per tumour")) + 
+      geom_point(size=1, alpha=1) +
+      geom_smooth(method="lm") +
+      annotate("text", x=-52, y=18, label=paste0("LR p = 7.6e-09"), size=5, hjust = 0) +
+      scale_fill_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      scale_colour_manual("Proliferation", labels = c("Low", "High"), values=c("grey50", "goldenrod4")) +
+      guides(colour="none", fill="none") +
+      scale_x_continuous(breaks=seq(-100,100,10)) +
+      scale_y_continuous(lim=c(0,20), breaks = seq(-2,22,4)) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.text.y=element_text(size=13, colour="black"), axis.text.x=element_text(size=13, colour="black"), axis.title=element_text(size=18, colour="black"), plot.title = element_text(size=18, hjust = 0.5, colour="black"), legend.key=element_rect(fill=NA), legend.text = element_text(size=13, colour="black"), legend.title = element_text(size=16, colour="black"), axis.title.y=element_text(margin=margin(0,10,0,0)), axis.title.x=element_text(margin=margin(10,0,0,0)))
+
+pdf("FgS7d.pdf", height  = 4)
+print(scatter_prolif)
+dev.off()
+
+```
+
+# Linear model analyses
+
+```{r Fig 3g}
+
+library(ggplot2)
+library(reshape2)
+library(RColorBrewer)
+library(gplots)
+
+Linear_model_results <- read.delim("Linear_model_results_cohorts.txt")
+Linear_model_results$CNA_log10 <- -log10(Linear_model_results$CNA_pvalue)
+Linear_model_results$Mut_log10 <- -log10(Linear_model_results$Mut_pvalue)
+Linear_model_results$Clone_log10 <- -log10(Linear_model_results$Clone_pvalue)
+Linear_model_results$Aneuploidy_log10 <- -log10(Linear_model_results$Aneuploidy_pvalue)
+Linear_model_results$Mean_log10 <- rowSums(Linear_model_results[,10:13])
+Linear_model_results <- Linear_model_results[order(Linear_model_results$Mean_log10, decreasing = T),]
+rownames(Linear_model_results) <- Linear_model_results$TCGA_cohort
+
+table_plot <- Linear_model_results[,c(13,11,10,12)]
+names(table_plot) <- c("Aneuploidy", "Mutations", "CNA", "Clones")
+
+pdf("Fig3g.pdf", width = 11, height = 5)
+
+my_palette <- colorRampPalette(c("white", "#D6604D", "#B2182B", "#67001F"))(n = 299)
+
+# greys
+colour_1 <- brewer.pal(9, "Greys")[4]
+colour_2 <- brewer.pal(9, "Greys")[6]
+colour_3 <- brewer.pal(9, "Greys")[9]
+
+heatmap.2(as.matrix(t(table_plot)), col=my_palette, scale="none", ColSideColors=c(colour_3, colour_2, colour_2, colour_1, colour_2, colour_2, colour_1, colour_1, colour_1, colour_1, colour_1, colour_1, colour_1), key=TRUE, symkey=FALSE, density.info="none",cexRow=2,cexCol=2,margins=c(8,10),  trace="none",srtCol=45, dendrogram = "col", key.title = "Fligner-Killeen test", key.xlab = "-log10 p.value", Rowv=FALSE)
+
+dev.off()
+
+```
+
