@@ -1,0 +1,258 @@
+---
+title: "TCGA BRCA analyses"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Breast_cancer/")
+
+```
+
+```{r load data}
+
+Final_expression_table <- read.delim("../Calculate_CA20_scores/CA20_expression_table_TCGA_CA20allCohorts.txt")
+Final_expression_table$Sample <- substr(Final_expression_table$Sample, 1, 12)
+Final_expression_table$Sample_ID <- rownames(Final_expression_table)
+
+Final_expression_table_breast <- Final_expression_table[Final_expression_table$Cohort %in% "BRCA",]
+
+```
+
+
+```{r Clinical and merge}
+
+# data downloaded at Calculate_CA20_scores.Rmd
+Clinical <- read.delim("../Calculate_CA20_scores/Firebrowse_download/gdac.broadinstitute.org_BRCA.Merge_Clinical.Level_1.2016012800.0.0/BRCA.clin.merged.txt", row.names = 1)
+Clinical=as.data.frame(t(Clinical))
+
+rownames(Clinical)=paste(Clinical$patient.bcr_patient_barcode,".01",sep="")
+rownames(Clinical)=gsub("-", ".", rownames(Clinical))
+
+library(dplyr)
+rownames(Clinical) <- toupper(rownames(Clinical))
+
+Final_clinical=Clinical[,c(23,28,1159, 1160,34,36, 1149)]
+
+Final_clinical$patient.breast_carcinoma_estrogen_receptor_status[Final_clinical$patient.breast_carcinoma_estrogen_receptor_status %in% c("indeterminate")] <- NA
+Final_clinical$patient.breast_carcinoma_progesterone_receptor_status[Final_clinical$patient.breast_carcinoma_progesterone_receptor_status %in% c("indeterminate")] <- NA
+
+Final_clinical$Her2_status=Final_clinical$patient.lab_proc_her2_neu_immunohistochemistry_receptor_status
+Final_clinical$Her2_status[Final_clinical$patient.lab_proc_her2_neu_immunohistochemistry_receptor_status %in% c("equivocal", "indeterminate")] <- Final_clinical$patient.lab_procedure_her2_neu_in_situ_hybrid_outcome_type[Final_clinical$patient.lab_proc_her2_neu_immunohistochemistry_receptor_status %in% c("equivocal", "indeterminate")]
+Final_clinical$Her2_status[!complete.cases(Final_clinical$patient.lab_proc_her2_neu_immunohistochemistry_receptor_status)] <- Final_clinical$patient.lab_procedure_her2_neu_in_situ_hybrid_outcome_type[!complete.cases(Final_clinical$patient.lab_proc_her2_neu_immunohistochemistry_receptor_status)]
+Final_clinical$Her2_status[Final_clinical$patient.lab_proc_her2_neu_immunohistochemistry_receptor_status %in% c("negative") & Final_clinical$patient.lab_procedure_her2_neu_in_situ_hybrid_outcome_type %in% c("positive")] <- NA
+Final_clinical$Her2_status[Final_clinical$patient.lab_proc_her2_neu_immunohistochemistry_receptor_status %in% c("positive") & Final_clinical$patient.lab_procedure_her2_neu_in_situ_hybrid_outcome_type %in% c("negative")] <- NA
+Final_clinical$Her2_status[Final_clinical$Her2_status %in% c("equivocal", "indeterminate")] <- NA
+
+Final_clinical$final_OS=as.character(Final_clinical$patient.days_to_death)
+Final_clinical$final_OS_event=0
+Final_clinical$final_OS_event[complete.cases(Final_clinical$patient.days_to_death)] <- 1
+Final_clinical$final_OS[!complete.cases(Final_clinical$patient.days_to_death)] <- as.character(Final_clinical$patient.days_to_last_followup[!complete.cases(Final_clinical$patient.days_to_death)] )
+Final_clinical$final_OS=as.numeric(Final_clinical$final_OS)
+
+# merge with data from 2012 paper (https://www.nature.com/articles/nature11412) - table downloaded at http://www.cbioportal.org/study?id=brca_tcga_pub#clinical
+Nature_clinical_data <- read.delim("TCGA_BRCA_2012_clinical_data.tsv", na=c("NA", "na", "", " "))
+Nature_clinical_data$Sample.ID=gsub("-", ".", Nature_clinical_data$Sample.ID)
+
+Final_clinical_merged <- merge(Final_clinical, Nature_clinical_data, all.x=T, by.x=0, by.y=2)
+
+## merge with expression data
+Final_table = merge(Final_clinical_merged, Final_expression_table_breast, all.y=T, by.x=1, by.y=0)
+rownames(Final_table)=Final_table$Row.names
+Final_table=Final_table[,-1]
+
+```
+
+### Plots
+
+```{r Fig 2a}
+
+library(ggsignif) 
+library(RColorBrewer)
+
+SampleType_table=Final_table[Final_table$sample_type_detail %in% c("Primary Solid Tumor", "Solid Tissue Normal"),]
+
+wilcox.test(SampleType_table$CA20[SampleType_table$sample_type %in% "Normal"], SampleType_table$CA20[SampleType_table$sample_type %in% "Tumor"])
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_sample_type <- ggplot(SampleType_table, aes(x=factor(sample_type), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,20), limits = c(-50,49)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(trim = T, aes(fill=factor(sample_type)))+
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values = c(rgb(230,230,230,maxColorValue=255), "orangered")) +
+      geom_signif(comparisons = list(c("Normal", "Tumor")), annotations="****", y_position = 40, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      scale_x_discrete(name="", labels=c(paste0("Normal\n(", length(SampleType_table$sample_type[which(SampleType_table$sample_type %in% "Normal")]), ")"),
+                                         paste0("Tumour\n(", length(SampleType_table$sample_type[which(SampleType_table$sample_type %in% "Tumor")]), ")"))) +
+      stat_summary(fun.data=data_summary, color="black", size=0.4) +
+      guides(fill=F)
+
+pdf("Fig2a.pdf", width = 1.7, height = 2)
+
+print(plot_sample_type)
+
+dev.off()
+
+```
+
+
+```{r Fig 2b}
+
+Type_table=Final_table[Final_table$patient.histological_type %in% c("infiltrating ductal carcinoma", "infiltrating lobular carcinoma"),]
+Type_table$patient.histological_type <- relevel(Type_table$patient.histological_type, "infiltrating lobular carcinoma")
+
+Type_table$Triple_Negative <- "Non-TNBC"
+Type_table$Triple_Negative[Type_table$patient.breast_carcinoma_estrogen_receptor_status %in% "negative" & Type_table$patient.breast_carcinoma_progesterone_receptor_status %in% "negative" & Type_table$Her2_status %in% "negative"] <- "TNBC"
+
+wilcox.test(Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating ductal carcinoma"], Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating lobular carcinoma"])
+wilcox.test(Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating lobular carcinoma" & Type_table$Triple_Negative %in% "Non-TNBC"], Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating lobular carcinoma"  & Type_table$Triple_Negative %in% "TNBC"])
+wilcox.test(Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating ductal carcinoma" & Type_table$Triple_Negative %in% "Non-TNBC"], Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating ductal carcinoma"  & Type_table$Triple_Negative %in% "TNBC"])
+wilcox.test(Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating lobular carcinoma" & Type_table$Triple_Negative %in% "Non-TNBC"], Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating ductal carcinoma"  & Type_table$Triple_Negative %in% "Non-TNBC"])
+wilcox.test(Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating lobular carcinoma" & Type_table$Triple_Negative %in% "TNBC"], Type_table$CA20[Type_table$patient.histological_type %in% "infiltrating ductal carcinoma"  & Type_table$Triple_Negative %in% "TNBC"])
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_hist <- ggplot(Type_table[Type_table$patient.histological_type %in% c("infiltrating lobular carcinoma","infiltrating ductal carcinoma"),], aes(x=factor(patient.histological_type), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,20), limits = c(-50,49)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(trim=T, aes(fill=factor(patient.histological_type)))+
+      stat_summary(fun.data=data_summary, color="black", size=0.4) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values=brewer.pal(n = 4, name = "Oranges")) +
+      geom_signif(comparisons = list(c("infiltrating lobular carcinoma","infiltrating ductal carcinoma")), annotations="****", y_position = 40, tip_length = 0.02, size = 0.5, textsize = 3, vjust=0.55) +
+      scale_x_discrete(name="", labels = c(paste0("Lobular\n(", length(Type_table$patient.histological_type[which(Type_table$patient.histological_type %in% "infiltrating lobular carcinoma")]), ")"),
+                                           paste0("Ductal\n(", length(Type_table$patient.histological_type[which(Type_table$patient.histological_type %in% "infiltrating ductal carcinoma")]), ")"))) +
+      guides(fill=F)
+
+pdf("Fig2b.pdf", width = 1.7, height = 2)
+
+print(plot_hist)
+
+dev.off()
+
+```
+
+```{r Fig 2c}
+
+PAM50_table=Final_table[complete.cases(Final_table$PAM50.subtype) & Final_table$sample_type_detail %in% "Primary Solid Tumor" & Final_table$PAM50.subtype %in% c("Luminal A", "Luminal B", "HER2-enriched", "Basal-like"),]
+PAM50_table$PAM50.subtype=factor(PAM50_table$PAM50.subtype, levels = c("Luminal A", "Luminal B", "HER2-enriched", "Basal-like"))
+
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"])
+
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"])
+
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"])
+
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal A"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Luminal B"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"])
+wilcox.test(PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "HER2-enriched"], PAM50_table$CA20[PAM50_table$PAM50.subtype %in% "Basal-like"])
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_PAM50 <- ggplot(PAM50_table, aes(x=factor(PAM50.subtype), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,20), limits = c(-50,49)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(trim=T, aes(fill=factor(PAM50.subtype)))+
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values=brewer.pal(n = 4, name = "Greens")) +
+      geom_signif(comparisons = list(c("Luminal A", "Luminal B")), annotations="****", y_position = 39, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("Basal-like", "HER2-enriched")), annotations="***", y_position = 39, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("Basal-like", "Luminal B")), annotations="****", y_position = 44, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("Basal-like", "Luminal A")), annotations="****", y_position = 49, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      scale_x_discrete(name="", labels=c(paste0("Luminal A\n(", length(PAM50_table$PAM50.subtype[which(PAM50_table$PAM50.subtype %in% "Luminal A")]), ")"),
+                                         paste0("Luminal B\n(", length(PAM50_table$PAM50.subtype[which(PAM50_table$PAM50.subtype %in% "Luminal B")]), ")"),
+                                         paste0("HER2\n(", length(PAM50_table$PAM50.subtype[which(PAM50_table$PAM50.subtype %in% "HER2-enriched")]), ")"),
+                                         paste0("Basal-like\n(", length(PAM50_table$PAM50.subtype[which(PAM50_table$PAM50.subtype %in% "Basal-like")]), ")"))) +
+      stat_summary(fun.data=data_summary, color="black", size=0.4) +
+      guides(fill=F)
+
+pdf("Fig2c.pdf", width = 2.9, height = 2)
+
+print(plot_PAM50)
+
+dev.off()
+
+```
+
+
+```{r Fig 2d}
+
+Stage_table=Final_table[complete.cases(Final_table$Converted.Stage) & Final_table$sample_type_detail %in% "Primary Solid Tumor" & !Final_table$Converted.Stage %in% c("No_Conversion", "Stage"),]
+Stage_table$Converted.Stage=as.character(Stage_table$Converted.Stage)
+
+Stage_table$Converted.Stage[grep("Stage IIA", Stage_table$Converted.Stage)] <- "Stage II"
+Stage_table$Converted.Stage[grep("Stage IIB", Stage_table$Converted.Stage)] <- "Stage II"
+Stage_table$Converted.Stage[grep("Stage III", Stage_table$Converted.Stage)] <- "Stage III"
+
+wilcox.test(Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage I"], Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage II"])
+wilcox.test(Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage I"], Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage III"])
+wilcox.test(Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage I"], Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage IV"])
+
+wilcox.test(Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage II"], Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage III"])
+wilcox.test(Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage II"], Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage IV"])
+
+wilcox.test(Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage III"], Stage_table$CA20[Stage_table$Converted.Stage %in% "Stage IV"])
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_stage <- ggplot(Stage_table, aes(x=factor(Converted.Stage), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,20), limits = c(-50,49)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(data=Stage_table[!Stage_table$Converted.Stage %in% c("Stage IV"),], aes(x=factor(Converted.Stage), y=CA20, fill=factor(Converted.Stage)), trim=T)+
+      stat_summary(data=Stage_table[!Stage_table$Converted.Stage %in% c("Stage IV"),], aes(x=factor(Converted.Stage), y=CA20), fun.data=data_summary, color="black", size=0.4) +
+      geom_point(data=Stage_table[Stage_table$Converted.Stage %in% c("Stage IV"),], aes(x=factor(Converted.Stage), y=CA20), colour="black", size=0.8) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values=brewer.pal(n = 4, name = "Blues")) +
+      geom_signif(comparisons = list(c("Stage I", "Stage II")), annotations="****", y_position = 38, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("Stage II", "Stage III")), annotations="n.s.", y_position = 43, tip_length = 0.03, size = 0.5, textsize = 2, vjust=-0.1) +
+      geom_signif(comparisons = list(c("Stage III", "Stage IV")), annotations="n.s.", y_position = 48, tip_length = 0.03, size = 0.5, textsize = 2, vjust=-0.1) +
+      scale_x_discrete(name="", labels=c(paste0("Stage I\n(", length(Stage_table$Converted.Stage[which(Stage_table$Converted.Stage %in% "Stage I")]), ")"),
+                                         paste0("Stage II\n(", length(Stage_table$Converted.Stage[which(Stage_table$Converted.Stage %in% "Stage II")]), ")"),
+                                         paste0("Stage III\n(", length(Stage_table$Converted.Stage[which(Stage_table$Converted.Stage %in% "Stage III")]), ")"),
+                                         paste0("Stage IV\n(", length(Stage_table$Converted.Stage[which(Stage_table$Converted.Stage %in% "Stage IV")]), ")"))) +
+      guides(fill=F)
+
+pdf("Fig2d.pdf", width = 2.9, height = 2)
+
+print(plot_stage)
+
+dev.off()
+
+```
+

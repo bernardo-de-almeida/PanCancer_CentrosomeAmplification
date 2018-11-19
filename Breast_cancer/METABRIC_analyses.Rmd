@@ -1,0 +1,305 @@
+---
+title: "METABRIC validation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r set working directory}
+
+# Change to directory of cloning
+setwd("~/Documents/CA20_all_TCGA/GitHub/Breast_cancer/")
+
+```
+
+```{r Load data}
+
+# Data from European Genome-phenome Archive (EGA) (https://ega-archive.org/dacs/EGAC00001000484)
+# Since the data is protected we cannos share it. Nevertheless, we provide here the code used in this analysis
+
+# Download table with METABRIC gene expression data for tumours and controls
+Metabric_all <- readRDS("Metabric_expression_data.rds")
+dim(Metabric_all)
+#[1] 2136 48804
+
+# convert probes
+library(illuminaHumanv3.db)
+
+Probes <- select(illuminaHumanv3.db, colnames(Metabric_all), c("SYMBOL","ENTREZID", "GENENAME"))
+CA_20_genes <- c("AURKA", "CCNA2", "CCND1", "CCNE2", "CDK1", "CEP63", "CEP152", 'E2F1', "E2F2", "LMO4", "MDM2", "MYCN", "NDRG1", 'NEK2', "PIN1", "PLK1", 'PLK4', 'SASS6', "STIL", "TUBG1")
+Probes_CA20 <- Probes[Probes$SYMBOL %in% CA_20_genes,]
+
+Metabric_filt <- merge(Probes_CA20, as.data.frame(t(Metabric_all[,colnames(Metabric_all) %in% Probes_CA20$PROBEID])), by.x=1, by.y=0)
+
+# summarise by mean
+Metabric_filt_2 <- aggregate(Metabric_filt[,5:ncol(Metabric_filt)],by=list(SYMBOL=Metabric_filt$SYMBOL, GENENAME=Metabric_filt$GENENAME),data=Metabric_filt,FUN=mean)
+rownames(Metabric_filt_2) <- Metabric_filt_2$SYMBOL
+Metabric_filt_2 <- as.data.frame(t(Metabric_filt_2[,-c(1:2)]))
+
+```
+
+``` {r calculate CA20 scores}
+
+Final_expression_table_CA20 <- as.data.frame(scale(as.matrix(Metabric_filt_2[,1:20]), center = colMedians(as.matrix(Metabric_filt_2[,1:20])), scale = F))
+Final_expression_table_CA20$CA20 <- rowSums(as.matrix(Final_expression_table_CA20))
+Final_expression_table_CA20$CA20_group_all_samples <- ifelse(Final_expression_table_CA20$CA20<=mean(Final_expression_table_CA20$CA20), "Lower", "Higher")
+
+# add clinial data
+Final_table <- merge(Final_expression_table_CA20, Metabric_all[,48803:48804], by=0)
+rownames(Final_table) <- Final_table$Row.names
+Final_table <- Final_table[,-c(1,24)]
+
+write.table(Final_table, "CA20_expression_table_METABRIC.txt", row.names = T, quote=F, sep="\t")
+
+```
+
+```{r Fig 2e}
+
+Final_table$Sample_type=relevel(as.factor(Final_table$Sample_type), "Normal")
+
+wilcox.test(Final_table$CA20[Final_table$Sample_type %in% "Normal"], Final_table$CA20[Final_table$Sample_type %in% "Tumour"])
+
+library(ggsignif) 
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_sample_type <- ggplot(Final_table, aes(x=factor(Sample_type), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,10), limits = c(-12,26)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(trim=T, aes(fill=factor(Sample_type)))+
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values = c(rgb(230,230,230,maxColorValue=255), "orangered")) +
+      geom_signif(comparisons = list(c("Normal", "Tumour")), annotations="****", y_position = 23, tip_length = 0.03, size = 0.5, textsize = 3, vjust=0.55) +
+      scale_x_discrete(name="", labels=c(paste0("Normal\n(", length(Final_table$Sample_type[which(Final_table$Sample_type %in% "Normal")]), ")"),
+                                         paste0("Tumour\n(", length(Final_table$Sample_type[which(Final_table$Sample_type %in% "Tumour")]), ")"))) +
+      stat_summary(fun.data=data_summary, color="black", size=0.4) +
+      guides(fill=F)
+
+pdf("Fig2e.pdf", width = 1.7, height = 2)
+
+print(plot_sample_type)
+
+dev.off()
+
+```
+
+## Analyses with breat cancer clinical features
+
+```{r merge with clinical}
+
+# data from cBioPortal (from http://www.cbioportal.org/study?id=brca_metabric#clinical)
+
+Clinical <- read.delim("METABRIC_clinical_data.tsv", na.strings = c("NA", "na", "", " "))
+rownames(Clinical) <- gsub("-", ".", Clinical$Sample.ID)
+str(Clinical)
+
+Final_table_clinical <- merge(Clinical, Final_table[Final_table$Sample_type %in% "Tumour",], by=0)
+rownames(Final_table_clinical) <- Final_table_clinical$Row.names
+Final_table_clinical <- Final_table_clinical[,-1]
+
+Final_table_clinical$Triple_Negative <- "Non-TNBC"
+Final_table_clinical$Triple_Negative[Final_table_clinical$ER.Status %in% "-" & Final_table_clinical$PR.Status %in% "-" & Final_table_clinical$HER2.Status %in% "-"] <- "TNBC"
+
+```
+
+```{r Fig 2f}
+
+library(RColorBrewer)
+
+Final_table_clinical$Cancer.Type.Detailed_2 <- NA
+Final_table_clinical$Cancer.Type.Detailed_2[Final_table_clinical$Cancer.Type.Detailed %in% "Breast Invasive Ductal Carcinoma"] <- "Invasive Ductal"
+Final_table_clinical$Cancer.Type.Detailed_2[Final_table_clinical$Cancer.Type.Detailed %in% "Breast Invasive Lobular Carcinoma"] <- "Invasive Lobular"
+Final_table_clinical$Cancer.Type.Detailed_2[Final_table_clinical$Cancer.Type.Detailed %in% "Breast Mixed Ductal and Lobular Carcinoma"] <- "Mixed"
+Final_table_clinical$Cancer.Type.Detailed_2[Final_table_clinical$Cancer.Type.Detailed %in% "Invasive Breast Carcinoma"] <- "Invasive"
+Final_table_clinical$Cancer.Type.Detailed_2 <- as.factor(Final_table_clinical$Cancer.Type.Detailed_2)
+Final_table_clinical$Cancer.Type.Detailed_2 <- relevel(Final_table_clinical$Cancer.Type.Detailed_2, "Invasive Lobular")
+
+
+wilcox.test(Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Ductal"], Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Lobular"])
+
+wilcox.test(Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Ductal" & Final_table_clinical$Triple_Negative %in% "Non-TNBC"], Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Ductal" & Final_table_clinical$Triple_Negative %in% "TNBC"])
+
+wilcox.test(Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Lobular" & Final_table_clinical$Triple_Negative %in% "Non-TNBC"], Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Lobular" & Final_table_clinical$Triple_Negative %in% "TNBC"])
+
+wilcox.test(Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Ductal" & Final_table_clinical$Triple_Negative %in% "Non-TNBC"], Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Lobular" & Final_table_clinical$Triple_Negative %in% "Non-TNBC"])
+
+wilcox.test(Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Ductal" & Final_table_clinical$Triple_Negative %in% "TNBC"], Final_table_clinical$CA20[Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Lobular" & Final_table_clinical$Triple_Negative %in% "TNBC"])
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_hist <- ggplot(Final_table_clinical[Final_table_clinical$Cancer.Type.Detailed_2 %in% c("Invasive Ductal","Invasive Lobular"),], aes(x=factor(Cancer.Type.Detailed_2), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,10), limits = c(-12,26)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(trim=T, aes(fill=factor(Cancer.Type.Detailed_2)))+
+      stat_summary(fun.data=data_summary, color="black", size=0.4) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values=brewer.pal(n = 4, name = "Oranges")) +
+      geom_signif(comparisons = list(c("Invasive Ductal","Invasive Lobular")), annotations="****", y_position = 23, tip_length = 0.02, size = 0.5, textsize = 3, vjust=0.55) +
+      scale_x_discrete(name="", labels = c(paste0("Lobular\n(", length(Final_table_clinical$Cancer.Type.Detailed_2[which(Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Lobular")]), ")"),
+                                           paste0("Ductal\n(", length(Final_table_clinical$Cancer.Type.Detailed_2[which(Final_table_clinical$Cancer.Type.Detailed_2 %in% "Invasive Ductal")]), ")"))) +
+      guides(fill=F)
+
+pdf("Fig2f.pdf", width = 1.7, height = 2)
+
+print(plot_hist)
+
+dev.off()
+
+```
+
+
+```{r Fig 2g}
+
+PAM50_table=Final_table_clinical[Final_table_clinical$Pam50...Claudin.low.subtype %in% c("LumA", "LumB", "Her2", "Basal"),]
+PAM50_table$Pam50...Claudin.low.subtype <- droplevels(PAM50_table$Pam50...Claudin.low.subtype)
+PAM50_table$Pam50...Claudin.low.subtype=factor(PAM50_table$Pam50...Claudin.low.subtype, levels = c("LumA", "LumB", "Her2", "Basal"))
+
+wilcox.test(PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "Basal"], PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "LumA"])
+wilcox.test(PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "Basal"], PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "LumB"])
+wilcox.test(PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "Basal"], PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "Her2"])
+
+wilcox.test(PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "LumA"], PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "LumB"])
+
+wilcox.test(PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "LumB"], PAM50_table$CA20[PAM50_table$Pam50...Claudin.low.subtype %in% "Her2"])
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_PAM50 <- ggplot(PAM50_table, aes(x=factor(Pam50...Claudin.low.subtype), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,10), limits = c(-12,26)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(trim=T, aes(fill=factor(Pam50...Claudin.low.subtype)))+
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values=brewer.pal(n = 4, name = "Greens")) +
+      geom_signif(comparisons = list(c("LumA", "LumB")), annotations="****", y_position = 19.5, tip_length = 0.02, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("Basal", "Her2")), annotations="****", y_position = 22, tip_length = 0.02, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("Basal", "LumB")), annotations="****", y_position = 24, tip_length = 0.02, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("Basal", "LumA")), annotations="****", y_position = 26, tip_length = 0.02, size = 0.5, textsize = 3, vjust=0.55) +
+      stat_summary(fun.data=data_summary, color="black", size=0.4) +
+      scale_x_discrete(name="", labels=c(paste0("Luminal A\n(", length(PAM50_table$Pam50...Claudin.low.subtype[which(PAM50_table$Pam50...Claudin.low.subtype %in% "LumA")]), ")"),
+                                         paste0("Luminal B\n(", length(PAM50_table$Pam50...Claudin.low.subtype[which(PAM50_table$Pam50...Claudin.low.subtype %in% "LumB")]), ")"),
+                                         paste0("HER2\n(", length(PAM50_table$Pam50...Claudin.low.subtype[which(PAM50_table$Pam50...Claudin.low.subtype %in% "Her2")]), ")"),
+                                         paste0("Basal-like\n(", length(PAM50_table$Pam50...Claudin.low.subtype[which(PAM50_table$Pam50...Claudin.low.subtype %in% "Basal")]), ")"))) +
+      guides(fill=F)
+
+pdf("Fig2g.pdf", width = 2.9, height = 2)
+
+print(plot_PAM50)
+
+dev.off()
+
+```
+
+```{r Stage}
+
+Final_table_clinical$Tumor.Stage2 <- NA
+Final_table_clinical$Tumor.Stage2[Final_table_clinical$Tumor.Stage %in% "1"] <- "I"
+Final_table_clinical$Tumor.Stage2[Final_table_clinical$Tumor.Stage %in% "2"] <- "II"
+Final_table_clinical$Tumor.Stage2[Final_table_clinical$Tumor.Stage %in% "3"] <- "III"
+Final_table_clinical$Tumor.Stage2[Final_table_clinical$Tumor.Stage %in% "4"] <- "IV"
+
+Stage_table <- Final_table_clinical[complete.cases(Final_table_clinical$Tumor.Stage2) & !Final_table_clinical$Tumor.Stage %in% "0",]
+
+wilcox.test(Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "I"], Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "II"])
+wilcox.test(Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "I"], Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "III"])
+wilcox.test(Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "I"], Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "IV"])
+
+wilcox.test(Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "II"], Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "III"])
+wilcox.test(Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "II"], Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "IV"])
+
+wilcox.test(Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "III"], Stage_table$CA20[Stage_table$Tumor.Stage2 %in% "IV"])
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_stages <- ggplot(Stage_table, aes(x=factor(Tumor.Stage2), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,10), limits = c(-12,26)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(data=Stage_table[!Stage_table$Tumor.Stage2 %in% c("IV"),], aes(x=factor(Tumor.Stage2), y=CA20, fill=factor(Tumor.Stage2)), trim=T)+
+      stat_summary(data=Stage_table[!Stage_table$Tumor.Stage2 %in% c("IV"),], aes(x=factor(Tumor.Stage2), y=CA20), fun.data=data_summary, color="black", size=0.4) +
+      geom_point(data=Stage_table[Stage_table$Tumor.Stage2 %in% c("IV"),], aes(x=factor(Tumor.Stage2), y=CA20), colour="black", size=0.8) +
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      scale_fill_manual(values=brewer.pal(n = 4, name = "Blues")) +
+      geom_signif(comparisons = list(c("I", "II")), annotations="****", y_position = 21.5, tip_length = 0.02, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(comparisons = list(c("II", "III")), annotations="n.s.", y_position = 23, tip_length = 0.02, size = 0.5, textsize = 2, vjust=-0.1) +
+      geom_signif(comparisons = list(c("III", "IV")), annotations="n.s.", y_position = 24.5, tip_length = 0.02, size = 0.5, textsize = 2, vjust=-0.1) +
+      scale_x_discrete(name="", labels = c(paste0("Stage I\n(", length(which(Stage_table$Tumor.Stage2%in%"I")) ,")"),
+                                           paste0("Stage II\n(", length(which(Stage_table$Tumor.Stage2%in%"II")) ,")"),
+                                           paste0("Stage III\n(", length(which(Stage_table$Tumor.Stage2%in%"III")) ,")"),
+                                           paste0("Stage IV\n(", length(which(Stage_table$Tumor.Stage2%in%"IV")) ,")"))) +
+      guides(fill=F)
+
+pdf("Fig2h.pdf", width = 2.9, height = 2)
+
+print(plot_stages)
+
+dev.off()
+
+```
+
+```{r Fig S2h}
+
+Final_table_clinical$Integrative.Cluster2 <- gsub("4ER\\+", "4", Final_table_clinical$Integrative.Cluster)
+Final_table_clinical$Integrative.Cluster2 <- gsub("4ER\\-", "4", Final_table_clinical$Integrative.Cluster2)
+Final_table_clinical$Integrative.Cluster2 <- factor(Final_table_clinical$Integrative.Cluster2, levels = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10"))
+
+# Fligner-killeen for ICs
+fligner.test(Final_table_clinical$CA20~Final_table_clinical$Integrative.Cluster2)
+
+# IC 10 vs each others
+results <- c()
+for(i in 1:9) {
+  p <- wilcox.test(Final_table_clinical$CA20[Final_table_clinical$Integrative.Cluster2 %in% "10"], Final_table_clinical$CA20[Final_table_clinical$Integrative.Cluster2 %in% i])$p.value
+  results <- c(results,p)
+}
+
+results_FDR <- p.adjust(results, method = "fdr")
+max(results_FDR)
+
+data_summary <- function(x) {
+   m <- median(x)
+   ymin <- as.numeric(quantile(x)[2])
+   ymax <- as.numeric(quantile(x)[4])
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+plot_IC <- ggplot(Final_table_clinical[complete.cases(Final_table_clinical$Integrative.Cluster2),], aes(x=factor(Integrative.Cluster2), y=CA20)) + 
+      scale_y_continuous(breaks=seq(-100,100,10), limits = c(-12,26)) +
+      ylab(paste("CA20 score")) + 
+      geom_violin(trim=T, aes(fill=factor(Integrative.Cluster2)))+
+      theme(panel.background = element_rect(fill="white",colour="white"), axis.line=element_line(colour="black"), axis.ticks=element_line(colour="black"), axis.text.x=element_text(size=8, colour="black"), axis.text.y=element_text(size=8, colour="black"), axis.title=element_text(size=10, colour="black"), axis.title.x = element_text(margin = margin(5,0,0,0)), legend.key = element_rect(fill="White"), legend.text = element_text(size=14), plot.title = element_text(hjust=0.5)) + 
+      stat_summary(fun.data=data_summary, color="black", size=0.4) +
+      geom_signif(y_position = 24, xmin=5, xmax=10, annotations="****", tip_length = 0.04, size = 0.5, textsize = 3, vjust=0.55) +
+      geom_signif(y_position = rep(22.65,9), xmin=1:9, xmax=1:9, annotations="", tip_length = 0.01, size = 0.4, textsize = 3, vjust=0.55) +
+      geom_signif(y_position = 22.7, xmin=1, xmax=9, annotations="", tip_length = 0, size = 0.4, textsize = 3, vjust=0.55) +
+      scale_x_discrete(name="") +
+      scale_fill_grey(start=0.9, end=0.4) +
+      guides(fill=F)
+
+
+pdf(paste0("FigS2h.pdf"), width = 2.9, height = 2)
+
+print(plot_IC)
+
+dev.off()
+
+```
