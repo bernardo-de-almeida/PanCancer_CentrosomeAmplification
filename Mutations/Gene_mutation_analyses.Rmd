@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r set working directory}
 
 # Change to directory of repository
-# setwd("~/")
+setwd("~/PanCancer_CentrosomeAmplification/Mutations/")
 
 ```
 
