@@ -11,8 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r set working directory}
 
-# Change to directory of cloning
-setwd("~/Documents/CA20_all_TCGA/GitHub/Calculate_CA20_scores/")
+# Change to directory of repository
+# setwd("~/")
 
 ```
 
